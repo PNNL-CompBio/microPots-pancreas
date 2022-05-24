@@ -63,21 +63,41 @@ mtab<-fulltab%>%dplyr::select(spot,islet,Coords,Plex,Islet_status)%>%
 
 pca_res <- prcomp(df,scale.=TRUE)
 
+##does not work yet
 p<-autoplot(pca_res,data=mtab,color='Islet_status')
 ```
 
 
-## Create trees of each voxel
+## Create trees of each voxel, see how they compare with primary data in PCA
 
 ```{r make trees}
 
+library(PCSF)
+data('STRING')
 ##group by islet, take top 2.5 and bottom 2.5% of proteins
 
-##build network
+terminals <- list() #positive values, abs log ratio, names of values are GENE NAMES (HGNC)
+
+##build network for each voxel
+
+##for each list of proteins in each voxel network, identify overlap with expresion data
+## then plot PCA of new reduced expression set
 
 ```
 
 
+## Diffuse network in NetdifusR
+
+```{R diffuse network}
+
+modstring <- STRING
+modstring$cost <- 1-STRING$cost
+
+
+##https://github.com/USCCANA/netdiffuseR
+#or 
+###https://www.bioconductor.org/packages/devel/bioc/vignettes/diffuStats/inst/doc/diffuStats.pdf
+```
 ## Now compare trees in PCA to see how they compare
 
 
