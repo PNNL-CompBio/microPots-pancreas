@@ -1,0 +1,169 @@
+---
+title: "BayesSpaceTest"
+author: "Sara Gosline"
+date: "5/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+library(BayesSpace)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+## Format data
+First grab data and format into single table. Evaluate distributions of values
+
+```{r get data}
+
+syn=reticulate::import('synapseclient')
+sync=syn$login()
+
+tablist<-sync$tableQuery('select * from syn30806277')$asDataFrame()%>%
+  dplyr::select(id,islet)
+
+metadata <- sync$tableQuery('select * from syn30070462')$asDataFrame()%>%
+  mutate(s='S')%>%
+  unite(Islet_Number,s,Xcoord,Ycoord,sep='_',col='spot')
+
+fulltab<-do.call(rbind,apply(tablist,1,function(x)
+  read.table(sync$get(x[['id']])$path)%>%
+    mutate(islet=x[['islet']])))%>%
+  tibble::rownames_to_column('geneid')%>%
+  tidyr::separate(geneid,into=c('id','upid','protein'),
+                  sep='\\|')%>%
+  tidyr::pivot_longer(starts_with('S_'),
+                      names_to='Coords',
+                      values_to='logRatio')%>%
+  unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
+  left_join(metadata)
+
+
+```
+
+Now we have a sense of how the data are distributed
+
+
+## BayesSpace
+
+First format as `SingleCellExperiment` to make sure that the data can be fed in to BayesSpace. Add in in the known labels and coordinates.
+
+```{r format data}
+##now format to SingleCellExperiment
+library(Matrix)
+
+counts<-fulltab%>%
+  dplyr::select(spot,protein,logRatio)%>%
+  tidyr::pivot_wider(values_from=logRatio,names_from=spot)%>%
+  tibble::column_to_rownames('protein')
+
+colData <- fulltab%>%
+    dplyr::select(spot,islet,Coords,Islet_status)%>%
+  distinct()%>%
+  tidyr::separate(Coords,into=c('S','col','row'),sep='_')%>%
+  mutate(col=as.numeric(col),row=as.numeric(row))
+rowData <- data.frame(protein=rownames(counts))
+
+
+ggplot(fulltab,aes(x=logRatio,fill=Coords,shape=Islet_status,alpha=0.5))+geom_density()+facet_grid(islet~.)+scale_fill_manual(values=RColorBrewer::brewer.pal(9,'Set1'))
+
+ggplot(fulltab,aes(x=logRatio,fill=Islet_status,alpha=0.5))+geom_density()+facet_grid(islet~.)+scale_fill_manual(values=RColorBrewer::brewer.pal(9,'Set1'))
+```
+
+Now we have the data allegedly formatted as needed and can begin to infer things and can run through each spot individually.
+
+## Cluster and plotting function
+
+We put all the functionality into a single function for now.
+Here we do preprocessing, which works, cluster analysis, the clustering. We iterate through 1-4 clusters, but generally always use 3 since that is what we are expecting. However, it seems that 4 also works.  
+
+```{r spatial process, echo=FALSE}
+
+
+plotDataPerImage<-function(image){
+
+  library(RColorBrewer)
+  library(cowplot)
+  
+  #print(image)
+  i1_spots<-subset(colData,islet==image)%>%
+    tibble::column_to_rownames('spot')
+  
+  cmat <- as.matrix(counts[,rownames(i1_spots)])
+  #print(dim(cmat))
+  nas <- which(apply(cmat,1,function(x) all(is.na(x))))
+  if(length(nas)>0)
+    cmat <- cmat[-nas,]
+  #print(dim(cmat))
+  rowData <- rowData[rownames(cmat),]
+  sce <- SingleCellExperiment(assays=list(logcounts=as(cmat, "dgCMatrix")),
+                            rowData=rowData,
+                            colData=i1_spots)
+
+  set.seed(102)
+  panc <- spatialPreprocess(sce, platform="ST", 
+                              n.PCs=7, n.HVGs=1000, log.normalize=FALSE)
+
+  panc <- qTune(panc, qs=seq(1, 4), platform="ST", d=5)
+  qPlot(panc)
+  
+  panc3 <- spatialCluster(panc, q=3, platform="ST", d=5,
+                           init.method="kmeans", model="normal", gamma=2,
+                           nrep=2000, burn.in=200,
+                           save.chain=TRUE)
+  
+  panc4 <- spatialCluster(panc, q=4, platform="ST", d=5,
+                           init.method="kmeans", model="normal", gamma=2,
+                           nrep=2000, burn.in=200,
+                           save.chain=TRUE)
+  
+  pance3 <- spatialEnhance(panc3,q=3,d=5)
+  
+  pance4 <- spatialEnhance(panc4,q=4,d=5)
+
+  
+ cols<- RColorBrewer::brewer.pal(6,'Dark2')[c(1,2,3,6)]
+    c0=clusterPlot(panc,
+              palette=cols,
+              label='Islet_status')+
+    ggtitle(paste('Image',image,'labels'))
+    
+    c1=clusterPlot(panc3,
+              palette=cols)+
+    ggtitle(paste('Image',image,'data'))
+  
+   c2=clusterPlot(panc4,
+              palette=cols)+
+    ggtitle(paste('Image',image,'data'))
+  
+  c3=clusterPlot(pance3,
+              palette=cols)+
+    ggtitle(paste('Image',image,'subspot'))
+  
+  c4=clusterPlot(pance4,
+              palette=cols)+
+    ggtitle(paste('Image',image,'subspot'))
+
+  res=cowplot::plot_grid(c0,c1,c2,c3,c4)
+  print(res)
+
+  ggsave(paste0('Islet',image,'.pdf'),res)
+  ggsave(paste0('Islet',image,'.png'),res)
+
+  return(panc)
+}
+
+```
+
+Now we can iterate over each of the spots. To see if they agree with our annotations. 
+
+```{r cluster}
+
+scObjs<-lapply(unique(colData$islet),function(x) plotDataPerImage(x))
+
+```
+
+To some extent they do, but in other cases they do not. We need to check annotations to ensure they are correct.

@@ -1,0 +1,85 @@
+---
+title: "PCSF Tests"
+author: "Sara Gosline"
+date: "5/20/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+library(PCSF)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+## Building trees out of voxels
+
+The idea behind this approach is to build steiner trees out of individual voxels. In doing so we can make the voxels more functionally relevant. 
+
+```{r cars}
+
+syn=reticulate::import('synapseclient')
+sync=syn$login()
+
+tablist<-sync$tableQuery('select * from syn30806277')$asDataFrame()%>%
+  dplyr::select(id,islet)
+
+metadata <- sync$tableQuery('select * from syn30070462')$asDataFrame()%>%
+  mutate(s='S')%>%
+  unite(Islet_Number,s,Xcoord,Ycoord,sep='_',col='spot')
+
+fulltab<-do.call(rbind,apply(tablist,1,function(x)
+  read.table(sync$get(x[['id']])$path)%>%
+    mutate(islet=x[['islet']])))%>%
+  tibble::rownames_to_column('geneid')%>%
+  tidyr::separate(geneid,into=c('id','upid','protein'),
+                  sep='\\|')%>%
+  tidyr::pivot_longer(starts_with('S_'),
+                      names_to='Coords',
+                      values_to='logRatio')%>%
+  unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
+  left_join(metadata)
+
+```
+
+## PCA of each voxel
+
+How do the voxels compare to each other? 
+
+
+```{r pressure, echo=FALSE}
+library(ggfortify)
+
+df<-fulltab%>%dplyr::select(spot,logRatio,protein)%>%
+  distinct()%>%
+  tidyr::pivot_wider(names_from=spot,values_from = logRatio)%>%
+  tibble::column_to_rownames('protein')
+
+mtab<-fulltab%>%dplyr::select(spot,islet,Coords,Plex,Islet_status)%>%
+  distinct()%>%
+  tibble::column_to_rownames('spot')
+
+pca_res <- prcomp(df,scale.=TRUE)
+
+p<-autoplot(pca_res,data=mtab,color='Islet_status')
+```
+
+
+## Create trees of each voxel
+
+```{r make trees}
+
+##group by islet, take top 2.5 and bottom 2.5% of proteins
+
+##build network
+
+```
+
+
+## Now compare trees in PCA to see how they compare
+
+
+
+## can we use tree output as input? 
