@@ -123,7 +123,7 @@ runPcsfOnProts<-function(tab,spot){
   print(spot)
   nres<-data.frame(nodes=c(""),prizes=c(""),spot=spot)
   res<-NULL
-  try(res<-PCSF::PCSF(ppi=ppi,terminals = terms))
+  try(res<-PCSF::PCSF_rand(ppi=ppi,terminals = terms,n=25))
   if(!is.null(res) && length(vertex.attributes(res)$name)>1)
     nres<-data.frame(nodes=vertex.attributes(res)$name,
                      prizes=vertex.attributes(res)$prize,
