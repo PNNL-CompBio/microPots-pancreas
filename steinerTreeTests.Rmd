@@ -30,6 +30,7 @@ metadata <- sync$tableQuery('select * from syn30070462')$asDataFrame()%>%
   mutate(s='S')%>%
   unite(Islet_Number,s,Xcoord,Ycoord,sep='_',col='spot')
 
+up_map <- read.table("uniprotMap.txt",col.names=c('protein','genename'))
 fulltab<-do.call(rbind,apply(tablist,1,function(x)
   read.table(sync$get(x[['id']])$path)%>%
     mutate(islet=x[['islet']])))%>%
@@ -40,7 +41,8 @@ fulltab<-do.call(rbind,apply(tablist,1,function(x)
                       names_to='Coords',
                       values_to='logRatio')%>%
   unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
-  left_join(metadata)
+  left_join(metadata)%>%
+  left_join(up_map)
 
 ```
 
@@ -52,36 +54,155 @@ How do the voxels compare to each other?
 ```{r pressure, echo=FALSE}
 library(ggfortify)
 
-df<-fulltab%>%dplyr::select(spot,logRatio,protein)%>%
+df<-fulltab%>%dplyr::select(spot,logRatio,genename)%>%
   distinct()%>%
-  tidyr::pivot_wider(names_from=spot,values_from = logRatio)%>%
-  tibble::column_to_rownames('protein')
+  subset(genename!='')%>%
+  tidyr::pivot_wider(names_from=spot,values_from = logRatio,
+                     values_fn = list(logRatio=mean))%>%
+  tibble::column_to_rownames('genename')
 
 mtab<-fulltab%>%dplyr::select(spot,islet,Coords,Plex,Islet_status)%>%
   distinct()%>%
   tibble::column_to_rownames('spot')
 
-pca_res <- prcomp(df,scale.=TRUE)
+nas<-which(apply(df,1,function(x) any(is.na(x))))
+
+pca_res <- prcomp(t(df[-nas,]),scale.=TRUE,center = TRUE, na.action=na.omit)
 
 ##does not work yet
-p<-autoplot(pca_res,data=mtab,color='Islet_status')
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
 ```
 
 
-## Create trees of each voxel, see how they compare with primary data in PCA
+## Get most expressed proteins in each voxel
 
-```{r make trees}
+First we bracket the data into the top vs bottom proteins to see how they are expressed.
+
+
+```{r get top proteins}
+
+##group by islet, take top 2.5 and bottom 2.5% of proteins
+  
+limits <- fulltab%>%
+  dplyr::select(spot,logRatio)%>%
+  dplyr::group_by(spot)%>%
+  summarize(top=quantile(logRatio,0.975,na.rm=T),bottom=quantile(logRatio,0.025,na.rm=T))
+
+##now determine if proteins are in top or bottom or none
+topTerms <- fulltab%>%left_join(limits)%>%
+  mutate(isTop=logRatio>top)%>%
+  mutate(isBottom=logRatio<bottom)%>%
+  subset(isTop|isBottom)
+
+##how many top proteins in each spot? plot this
+ggplot(topTerms)+geom_jitter(aes(x=islet,y=logRatio,col=Islet_status))
+
+
+```
+
+##Now run networks on top prots
+
+iterate over the top proteins in each voxel 
+
+```{r run net, echo=FALSE, warning=FALSE,message=FALSE}
+
 
 library(PCSF)
 data('STRING')
-##group by islet, take top 2.5 and bottom 2.5% of proteins
-
-terminals <- list() #positive values, abs log ratio, names of values are GENE NAMES (HGNC)
+runPcsfOnProts<-function(tab,spot){
+  terms<-tab$logRatio
+  spot=unlist(spot)
+#  print(spot)
+  gene<-tab$genename
+  ##map protein to gene name
+  names(terms)<-gene
+  ppi <- construct_interactome(STRING)
+  
+  ##return gene names, prizes
+  print(spot)
+  nres<-data.frame(nodes=c(""),prizes=c(""),spot=spot)
+  res<-NULL
+  try(res<-PCSF::PCSF(ppi=ppi,terminals = terms))
+  if(!is.null(res) && length(vertex.attributes(res)$name)>1)
+    nres<-data.frame(nodes=vertex.attributes(res)$name,
+                     prizes=vertex.attributes(res)$prize,
+                     spot=spot)
+  return(nres)
+}
 
 ##build network for each voxel
 
+#now build networks based on top terms alone 
+nets<-topTerms%>%
+  subset(isTop)%>%
+  dplyr::select(spot,genename,logRatio)%>%
+ # separate(protein,into=c('gene','human'),sep='_')%>%
+#  dplyr::select(spot,genename,logRatio)%>%
+  group_by(spot)%>%
+  dplyr::group_map(.f=runPcsfOnProts,.keep=FALSE)%>%
+  do.call(rbind,.)
+
+##now join with data from original table
+##map distance between each network?
+toplot<-fulltab%>%dplyr::select(genename,spot,logRatio,Islet_status)%>%
+  #tidyr::separate(protein,into=c('nodes','hum'),sep='_')%>%
+  dplyr::rename(nodes='genename')%>%
+  right_join(nets,by=c('nodes','spot'))
 ##for each list of proteins in each voxel network, identify overlap with expresion data
+
+```
+
+
+
 ## then plot PCA of new reduced expression set
+```{r pca vals}
+
+##PCA of prizes
+df<-toplot%>%dplyr::select(spot,prizes,nodes)%>%
+  mutate(prizes=as.numeric(prizes))%>%
+  distinct()%>%
+  tidyr::pivot_wider(names_from=spot,values_from = prizes,
+                     values_fill = list(prizes=0.0),
+                     values_fn = list(prizes=mean))%>%
+  tibble::column_to_rownames('nodes')
+
+mtab<-toplot%>%
+  dplyr::select(spot,Islet_status)%>%
+  distinct()%>%
+  subset(!is.na(Islet_status))%>%
+  tibble::column_to_rownames('spot')
+
+nac<-which(colMeans(df,na.rm=T)!=0)
+nar<-which(rowMeans(df,na.rm=T)!=0)
+pca_res <- prcomp(t(df[nar,nac]),scale.=TRUE,center = TRUE)
+
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
+
+
+##PCA of expression
+df2<-toplot%>%dplyr::select(spot,logRatio,nodes)%>%
+  mutate(logRatio=as.numeric(logRatio))%>%
+  distinct()%>%
+  replace_na(list(logRatio=0.0))%>%
+  tidyr::pivot_wider(names_from=spot,
+                     values_from = logRatio,
+                     values_fn =list(logRatio=mean),
+                     values_fill = list(logRatio=0.0))%>%
+  tibble::column_to_rownames('nodes')
+
+mtab2<-toplot%>%dplyr::select(spot,Islet_status)%>%
+  distinct()%>%
+  subset(!is.na(Islet_status))%>%
+  tibble::column_to_rownames('spot')
+
+nac<-which(colMeans(df2,na.rm=T)!=0)
+nar<-which(rowMeans(df2,na.rm=T)!=0)
+pca_res <- prcomp(t(df2[nar,nac]),scale.=TRUE,center = TRUE)
+
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
 
 ```
 
@@ -90,9 +211,10 @@ terminals <- list() #positive values, abs log ratio, names of values are GENE NA
 
 ```{R diffuse network}
 
+##let's borrow a bit from PCSF
 modstring <- STRING
 modstring$cost <- 1-STRING$cost
-
+igraph_ppi <- construct_interactome(modstring)
 
 ##https://github.com/USCCANA/netdiffuseR
 #or 
