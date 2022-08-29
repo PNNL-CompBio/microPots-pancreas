@@ -1,0 +1,83 @@
+---
+title: "GSEA"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r loadPackage}
+library(MSnID)
+library(dplyr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+
+
+
+```{r getPackages}
+# Create conversion table with MSnID::fetch_conversion_table
+conv_tbl <- fetch_conversion_table(
+  organism_name = "Homo sapiens", from = "UNIPROT", to = "ENTREZID"
+)
+head(conv_tbl, 10)
+```
+
+
+```{r biomRtInstall}
+## Install missing packages
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("biomaRt")
+## ------------------------
+library(biomaRt)
+```
+
+
+```{r load_data}
+x <- read.csv("Combined_CorrelationRank.csv") %>% 
+  mutate(UNIPROT = sub(".*\\|(.*)\\|.*", "\\1", Protein)) %>% 
+  left_join(conv_tbl, by = "UNIPROT") %>% 
+  filter(!is.na(ENTREZID)) %>% 
+  mutate(ranking_metric = corVal) %>% 
+  group_by(ENTREZID) %>% 
+  summarise(ranking_metric = mean(ranking_metric)) %>% 
+  arrange(-ranking_metric) %>%
+  tibble::deframe()
+
+x <- read.csv("Islet_CorrelationRank.csv") %>% 
+  split.data.frame(.$Islet_Number) %>% 
+  lapply(function(xi)
+  {
+    xi %>% 
+      mutate(UNIPROT = sub(".*\\|(.*)\\|.*", "\\1", Protein)) %>% 
+      left_join(conv_tbl, by = "UNIPROT") %>% 
+      filter(!is.na(ENTREZID)) %>% 
+      mutate(ranking_metric = corVal) %>%
+      na.omit() %>% 
+      group_by(ENTREZID) %>% 
+      summarise(ranking_metric = mean(ranking_metric)) %>% 
+      arrange(-ranking_metric) %>%
+      tibble::deframe() %>% 
+      gseGO(geneList = ., 
+                 ont = "ALL", 
+                 eps = 0,
+                 OrgDb = org.Hs.eg.db, 
+                 nPermSimple = 10000, minGSSize = 15, maxGSSize = 300) %>% .@result
+  })
+
+x2 <- x %>% tibble::enframe(name = "Islet_Number") %>% tidyr::unnest(cols = value)
+
+go_gsea <- gseGO(geneList = x, 
+                 ont = "ALL", 
+                 eps = 0,
+                 OrgDb = org.Hs.eg.db, 
+                 nPermSimple = 10000, minGSSize = 15, maxGSSize = 300)
+
+GSEA_result <- go_gsea@result
+
+write.csv(GSEA_result, "combined_gsea.csv")
+
+```
