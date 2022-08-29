@@ -1,0 +1,231 @@
+---
+title: "Crosstab"
+output: html_document
+---
+
+```{r packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Proteomics Install
+#install.packages("remotes")
+library(remotes)
+#install_github("PNNL-Comp-Mass-Spec/MSnID@pnnl-master")
+#install_github("PNNL-Comp-Mass-Spec/PlexedPiper")
+#install_github("PNNL-Comp-Mass-Spec/PNNL.DMS.utils")
+
+### Might need to run --> remotes::install_github("PNNL-Comp-Mass-Spec/MSnID@pnnl-master", upgrade = F, force = T)
+library(MSnID)
+library(PlexedPiperTestData)
+library(PlexedPiper)
+library(PNNL.DMS.utils)
+library(Biostrings)
+```
+
+```{r proteomics}
+#1.1.1
+## Get MS-GF+ results from DMS
+data_package_num <- 3996 # global proteomics
+msnid <- read_msgf_data_from_DMS(data_package_num) # global proteomics
+show(msnid)
+
+#1.1.2
+# Correct for isotope selection error
+msnid <- correct_peak_selection(msnid)
+
+#1.1.3
+# Remove contaminants
+msnid <- apply_filter(msnid, "!grepl('Contaminant', accession)")
+show(msnid)
+
+#1.1.4
+#1% FDR filter at the peptide level
+msnid <- filter_msgf_data(msnid, level = "peptide", fdr.max = 0.01)
+show(msnid)
+
+#1.1.5
+## Get path to FASTA file from DMS
+path_to_FASTA <- path_to_FASTA_used_by_DMS(data_package_num)
+# Compute number of peptides per 1000 amino acids
+msnid <- compute_num_peptides_per_1000aa(msnid, path_to_FASTA)
+# 1% FDR filter at the protein level
+msnid <- filter_msgf_data(msnid, level = "accession", fdr.max = 0.01)
+show(msnid)
+
+#1.1.6
+# Inference of parsimonious protein set
+msnid <- infer_parsimonious_accessions(msnid, unique_only = FALSE)
+show(msnid)
+
+#1.1.7
+# Remove Decoy PSMs
+msnid <- apply_filter(msnid, "!isDecoy")
+show(msnid)
+
+#1.2.1
+## Get MASIC results from DMS
+masic_data <- read_masic_data_from_DMS(data_package_num, interference_score = TRUE)
+
+#1.2.2
+# Filter MASIC data
+masic_data <- filter_masic_data(masic_data, interference_score_threshold = 0.5, s2n_threshold = 0)
+# Save processed MSnID and MASIC data
+save(msnid, masic_data, file = "Analysis/project_3996/data/processed_msnid_and_masic.RData", compress = TRUE)
+
+#1.3.1
+# Create fractions table
+datasets <- unique(intersect(msnid$Dataset, masic_data$Dataset))
+fractions <- data.frame(Dataset = datasets) %>% 
+  mutate(PlexID = gsub(".*_W_(S\\d{1})_.*", "\\1", Dataset))
+
+#1.3.2
+# Create samples table
+samples <- reporter_converter$tmt10 %>% 
+  select(-ReporterIon) %>% # remove ReporterIon column
+  dplyr::slice(rep(1:n(), times = 2)) %>% # Copy TMT10 table two times (2 plexes)
+  # Create PlexID and QuantBlock columns. 
+  # Plex S1 goes with first 10 rows, plex S2 with last 10
+  mutate(PlexID = paste0("S", rep(1:2, each = 10)), QuantBlock = 1) %>% 
+  group_by(PlexID) %>% 
+  # Within each of the two PlexID groups, create unique reporter aliases
+  # and measurement names. ReporterAlias is "ref" for channel 131,
+  # and MeasurementName is NA so it is not included in the cross-tab.
+  mutate(ReporterAlias = paste(PlexID, 1:n(), sep = "_"), ReporterAlias = ifelse(ReporterName == "131", "ref", ReporterAlias),
+         MeasurementName = ifelse(ReporterAlias == "ref", 
+         NA, ReporterAlias)) %>% 
+  ungroup() # stop grouping by PlexID
+
+#1.3.3
+# Create references table
+references <- samples %>% 
+  filter(ReporterAlias == "ref") %>% 
+  # Select required columns and rename ReporterAlias to Reference
+  select(PlexID, QuantBlock, Reference = ReporterAlias)
+
+# Save study design tables with write.table
+write.table(fractions, file = "Analysis/project_3996/data/fractions.txt",
+            sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(samples, file = "Analysis/project_3996/data/samples.txt",
+            sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(references, file = "Analysis/project_3996/data/references.txt",
+            sep = "\t", quote = FALSE, row.names = FALSE)
+# Save study design tables with save
+save(fractions, samples, references, file = "Analysis/project_3996/data/study_design_tables.RData")
+
+#1.4.1
+# Create protein-level cross-tab by aggregating to accession level
+crosstab <- create_crosstab(msnid = msnid, 
+                            reporter_intensities = masic_data,
+                            aggregation_level = "accession",
+                            fractions = fractions, 
+                            samples = samples, 
+                            references = references)
+# Save cross-tab
+write.table(crosstab, file = "Analysis/project_3996/data/global_crosstab.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+# Save global proteins
+global_proteins <- rownames(crosstab)
+save(global_proteins, file = "Analysis/project_3996/data/global_proteins.RData")
+```
+
+
+```{r phosphoproteomics}
+#2.1.1
+# Read MS-GF+ data
+data_package_num <- 3626 # phospho
+msnid <- read_msgf_data_from_DMS(data_package_num)
+show(msnid)
+
+#2.1.2
+# Correct for isotope selection error
+msnid <- correct_peak_selection(msnid)
+
+#2.1.3
+# Remove non-phosphorylated peptides
+# (peptides that do not contain a *)
+msnid <- apply_filter(msnid, "grepl('\\\\*', peptide)")
+show(msnid)
+
+#2.1.4
+# Remove contaminants
+msnid <- apply_filter(msnid, "!grepl('Contaminant', accession)")
+show(msnid)
+
+#2.1.5
+# Filter PTMs by Ascore - only for phospho data
+ascore <- get_AScore_results(data_package_num)
+msnid <- best_PTM_location_by_ascore(msnid, ascore)
+
+#2.1.6
+# 1% FDR filter at the peptide level
+msnid <- filter_msgf_data(msnid, level = "peptide", fdr.max = 0.01)
+show(msnid)
+
+#2.1.7
+# Get path to FASTA file
+path_to_FASTA <- path_to_FASTA_used_by_DMS(data_package_num)
+# Compute number of peptides per 1000 amino acids
+msnid <- compute_num_peptides_per_1000aa(msnid, path_to_FASTA)
+# 1% FDR filter at the protein level
+msnid <- filter_msgf_data(msnid, level = "accession", fdr.max = 0.01)
+show(msnid)
+
+#2.1.8
+# Proteins from global proteomics cross-tab
+load("data/3442_global_proteins.RData")
+# Prioritized inference of parsimonious protein set
+msnid <- infer_parsimonious_accessions(msnid, unique_only = FALSE, prior = global_proteins)
+show(msnid)
+
+#2.1.9
+# Create AAStringSet
+fst <- readAAStringSet(path_to_FASTA)
+# Remove contaminants
+fst <- fst[!grepl("Contaminant", names(fst)), ]
+# First 6 names
+head(names(fst))
+# Modify names to match accessions(msnid)
+names(fst) <- gsub(" .*$", "", names(fst))
+# First 6 names
+head(names(fst))
+# Main mapping call
+msnid <- map_mod_sites(object = msnid, 
+                       fasta = fst, 
+                       accession_col = "accession", 
+                       peptide_mod_col = "peptide",
+                       mod_char = "*", # modification character
+                       site_delimiter = ";") # ; between multiple sites
+
+#2.1.10
+# Remove Decoy PSMs
+msnid <- apply_filter(msnid, "!isDecoy")
+show(msnid)
+
+#2.2.1
+# Read MASIC data
+masic_data <- read_masic_data_from_DMS(data_package_num, interference_score = TRUE)
+
+#2.2.2
+# Filter MASIC data
+masic_data <- filter_masic_data(masic_data, interference_score_threshold = 0.5, s2n_threshold = 0)
+
+#2.3.1
+# Create fractions table
+datasets <- unique(intersect(msnid$Dataset, masic_data$Dataset))
+fractions <- data.frame(Dataset = datasets) %>% 
+  mutate(PlexID = gsub(".*_P_(S\\d{1})_.*", "\\1", Dataset))
+# Use global samples and references tables
+samples <- read.delim("data/3442_samples.txt")
+references <- read.delim("data/3442_references.txt")
+# Save phospho fractions table
+write.table(fractions, file = "data/3626_fractions.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+
+#2.4.1
+# Create cross-tab - aggregate to SiteID level
+crosstab <- create_crosstab(msnid = msnid, 
+                            reporter_intensities = masic_data,
+                            aggregation_level = "SiteID",
+                            fractions = fractions, 
+                            samples = samples, 
+                            references = references)
+# Save cross-tab
+write.table(crosstab, file = "data/3662_phospho_crosstab.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+```
