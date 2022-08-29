@@ -1,0 +1,83 @@
+---
+title: "GSEA"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r loadPackage}
+library(MSnID)
+library(dplyr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+
+
+
+```{r getPackages}
+# Create conversion table with MSnID::fetch_conversion_table
+conv_tbl <- fetch_conversion_table(
+  organism_name = "Homo sapiens", from = "UNIPROT", to = "ENTREZID"
+)
+head(conv_tbl, 10)
+```
+
+
+```{r biomRtInstall}
+## Install missing packages
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("biomaRt")
+## ------------------------
+library(biomaRt)
+```
+
+
+```{r load_data}
+x <- read.table("combinedIslets_Results_New/Islet_Other/limma/limmaResults.txt", sep = "\t", header = T) %>% 
+  mutate(UNIPROT = sub(".*\\|(.*)\\|.*", "\\1", feature)) %>% 
+  left_join(conv_tbl, by = "UNIPROT") %>% 
+  filter(!is.na(ENTREZID)) %>% 
+  mutate(ranking_metric = -log10(P.Value) * sign(logFC)) %>% 
+  group_by(ENTREZID) %>% 
+  summarise(ranking_metric = mean(ranking_metric)) %>% 
+  arrange(-ranking_metric) %>%
+  tibble::deframe()
+
+go_gsea <- gseGO(geneList = x, 
+                 ont = "ALL", 
+                 eps = 0,
+                 OrgDb = org.Hs.eg.db, 
+                 nPermSimple = 10000, minGSSize = 15, maxGSSize = 300)
+
+View(go_gsea)
+```
+
+
+```{r GSEA_fig}
+GSEA_result <- go_gsea@result
+hist(GSEA_result$p.adjust, breaks = seq(0,1,.025))
+write.csv(GSEA_result, "combinedIslets_Results_New/Islet_Other/gsea/gsea_results.csv")
+```
+
+
+#Prob don't need - 
+```{r biomRtIDs}
+# Create mart
+listMarts() # determine biomart for useMart
+mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL")
+View(listDatasets(mart)) # determine dataset for useMart
+mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL", 
+                dataset = "rnorvegicus_gene_ensembl")
+# Create conversion table
+View(listAttributes(mart)) # determine attributes for getBM
+conv_tbl1 <- getBM(attributes = c("entrezgene_id", "uniprot_gn_id"),
+                   mart = mart)
+head(conv_tbl1, 10)
+
+```
+
+
