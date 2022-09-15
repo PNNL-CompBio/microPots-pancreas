@@ -1,6 +1,10 @@
 library(dplyr)
 library(purrr)
-library(MSnbase)
+library(devtools)
+#library(MSnSet.utils)
+if(!require(MSnSet.utils))
+  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
 library(ggplot2)
 
 islets <- c(0:4, 7, 10)
@@ -30,11 +34,6 @@ crosstabList <- lapply(names(crosstabs), function(file_i)
   })
 
 
-##create single matrix
-crosstab <- crosstabList %>% purrr::reduce(full_join, by = "feature") %>% 
-  tibble::column_to_rownames("feature") %>% 
-  as.matrix()
-
 
 ##read in metadata from synaspe
 library(readxl)
@@ -47,32 +46,64 @@ isletMeta <- readxl::read_xlsx(syn$get('syn30070383')$path,sheet='Metadata table
 isletMeta <- isletMeta[colnames(crosstab), ]
 
 
+
+
 #m1 <- m1[
+
+###let's try to plot it sara's way
 
 library(ggplot2)
 library(ggfortify)
+library(cowplot)
+
+##now we deal with the larger crosstab matrix
+##create single matrix
+crosstab <- crosstabList %>% purrr::reduce(full_join, by = "feature") %>% 
+  tibble::column_to_rownames("feature") %>% 
+  as.matrix()
 
 
-crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
-crosstab[which(is.na(crosstab),arr.ind=TRUE)]<-0.0
-crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
-pc<-prcomp(t(crosstab))
+red.crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
+red.crosstab[which(is.na(red.crosstab),arr.ind=TRUE)]<-0.0
 
-autoplot(pc,data=isletMeta,colour='IsletNumber')
-autoplot(pc,data=isletMeta,colour='IsletStatus')
+nz.crosstab<-crosstab
+nz.crosstab[which(is.na(crosstab),arr.ind=TRUE)]<-0.0
+#crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
 
+pc.z<-prcomp(t(nz.crosstab), center=TRUE,scale.=TRUE)
+pc.red<-prcomp(t(red.crosstab), center=TRUE,scale.=TRUE)
+
+
+#autoplot(pc,data=isletMeta,colour='IsletNumber')
+
+p1<-autoplot(pc.z,data=isletMeta,colour='IsletStatus')
+p2<-autoplot(pc.red,data=isletMeta,colour='IsletStatus')
+cowplot::plot_grid(p1,p2)
+
+##now plotting  with msn code
+isletMeta <- isletMeta[colnames(crosstab), ]
+
+m1 <- MSnSet(exprs = red.crosstab, pData = isletMeta)
+
+m2<- MSnSet(exprs = nz.crosstab, pData = isletMeta)
 ##Need to find the plot_pca funciton, is it in msnbase.utils?
 #plot_pca(m1, phenotype = "Islet_Number") #no batch effect
-#plot_pca(m1, phenotype = "Islet_status") #check biplot = T?
+p3=plot_pca(m1, phenotype = "IsletStatus",z_score=T) #check biplot = T?
+p4=plot_pca(m2, phenotype = "IsletStatus",z_score=T) #check biplot = T?
 
+cowplot::plot_grid(p3,p4)
 #save(m1, file = "combinedIslets_Results_New/combinedMSnSet.RData", compress = T)
 
-m1 <- MSnSet(exprs = crosstab, pData = isletMeta)
+#m1 <- MSnSet(exprs = crosstab, pData = isletMeta)
 #Run limma
-res <- limma_contrasts(eset = m1, model.str = "~ 0 + Islet_status", 
+res <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
                        coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
 
-write.table(res, "combinedIslets_Results_New/Proximal_Distal/limma/limmaResults.txt", quote = F, row.names = F, sep = "\t")
+res2 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusProximal", trend = T, robust = T) #plot = T?
+
+
+#write.table(res, "combinedIslets_Results_New/Proximal_Distal/limma/limmaResults.txt", quote = F, row.names = F, sep = "\t")
 
 #now take a look at the p-values
 hist(res$P.Value, breaks = seq(0,1,.025))
