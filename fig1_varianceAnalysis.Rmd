@@ -1,0 +1,136 @@
+---
+title: "HubMap pancreata exploratory figures and variance analysis"
+output: html_document
+---
+
+This document describes the basic analysis we need to showcase the value of the Hubmap data and proteomics analysis.
+
+```{r loading, echo=F, warning=F, message=F}
+library(dplyr)
+library(purrr)
+library(devtools)
+#library(MSnSet.utils)
+if(!require(MSnSet.utils))
+  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
+library(ggplot2)
+library(ggfortify)
+library(cowplot)
+
+source('loadHumanPancData.R')
+
+```
+
+Note that we store all files on synapse at [http://synapse.org/hubmap](http://synapse.org/hubmap). This includes basic data files and analysis results.
+
+Now we have a few ways to normalize.
+
+### Supplemental analysis to test normalization
+
+We wanted to confirm that there was no need to filter the data or zero it out. Once we scale the data via PCA we get decent sample clustering.
+
+```{r PCA plots}
+
+#now we deal with the larger crosstab matrix
+
+red.crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
+red.crosstab[which(is.na(red.crosstab),arr.ind=TRUE)]<-0.0
+
+nz.crosstab<-crosstab
+nz.crosstab[which(is.na(crosstab),arr.ind=TRUE)]<-0.0
+#crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
+
+pc.z<-prcomp(t(nz.crosstab), center=TRUE,scale.=TRUE)
+pc.red<-prcomp(t(red.crosstab), center=TRUE,scale.=TRUE)
+
+
+#autoplot(pc,data=isletMeta,colour='IsletNumber')
+
+p1<-autoplot(pc.z,data=isletMeta,colour='IsletStatus')+ggtitle('Full data')
+p2<-autoplot(pc.red,data=isletMeta,colour='IsletStatus')+ggtitle("Reduced data")
+cowplot::plot_grid(p1,p2)
+
+##now plotting  with msn code
+isletMeta <- isletMeta[colnames(crosstab), ]
+
+##we keep NA values in m1 and m2
+red.crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
+
+m1 <- MSnSet(exprs = red.crosstab, pData = isletMeta)
+
+m2<- MSnSet(exprs = crosstab, pData = isletMeta)
+##Need to find the plot_pca funciton, is it in msnbase.utils?
+#plot_pca(m1, phenotype = "Islet_Number") #no batch effect
+p3=plot_pca(m1, phenotype = "IsletStatus",z_score=T)+ggtitle('Reduced data') #check biplot = T?
+p4=plot_pca(m2, phenotype = "IsletStatus",z_score=T)+ggtitle("Full data") #check biplot = T?
+
+cowplot::plot_grid(p3,p4)
+
+p5=plot_pca(m1, phenotype = "IsletNumber",z_score=T)+ggtitle('Reduced data') #check biplot = T?
+p6=plot_pca(m2, phenotype = "IsletNumber",z_score=T)+ggtitle("Full data") #check biplot = T?
+
+cowplot::plot_grid(p5,p6)
+#save(m1, file = "combinedIslets_Results_New/combinedMSnSet.RData", compress = T)
+
+
+```
+
+
+Now that we can summarize the overlap between various regions we can also evaluate how various proteins vary. Basically there are over 1000 proteins that are generally up-regulated and down-regulated in islet. 
+
+```{r variable proteins}
+
+library(leapR)
+
+#data("ncipid")
+ data('krbpaths')
+##map features to Gene Names
+map<-read.table('uniprotMap.txt',header = TRUE)
+
+
+var.vals <- apply(exprs(m2),1,var,na.rm=T)%>%sort()%>%
+as.data.frame()%>%
+tibble::rownames_to_column('feature')%>%
+  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  left_join(map)%>%
+  dplyr::select(-c(sp,id,From))%>%
+  #subset(!is.na(var.vals))%>%
+  subset(!is.na(To))%>%
+  distinct()
+
+colnames(var.vals)[1]<-'variance'
+#rownames(var.df)
+hist(log10(var.vals$variance))
+
+
+
+##now remove dupes
+dupes<-var.vals$To[which(duplicated(var.vals$To))]
+
+non.dupes<-var.vals%>%
+  subset(!To%in%dupes)
+
+fixed.dupes<-var.vals%>%
+    subset(To%in%dupes)%>%
+    group_by(To,.drop=F)%>%
+    summarize(maxVar=max(variance))%>%
+    left_join(var.vals)%>%
+    subset(maxVar==variance)%>%
+  dplyr::select(-maxVar)
+
+full.var<-rbind(non.dupes,fixed.dupes)%>%
+  tibble::remove_rownames()%>%
+  tibble::column_to_rownames('To')%>%
+  arrange(desc(variance))
+
+##Now we can do analysis on thoes that are changing or not changing.
+order.res<-leapR(datamatrix=full.var,krbpaths,'enrichment_in_order',primary_columns='variance',minsize=10)%>%
+  subset(BH_pvalue<0.01)%>%
+ # dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+  arrange(BH_pvalue)
+
+p<-plotLeapR(order.res,'REACTOME')
+
+ggsave('mostVariableReactome.pdf',width=10)
+
+```

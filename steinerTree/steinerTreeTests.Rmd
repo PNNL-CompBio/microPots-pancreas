@@ -87,7 +87,7 @@ First we bracket the data into the top vs bottom proteins to see how they are ex
 limits <- fulltab%>%
   dplyr::select(spot,logRatio)%>%
   dplyr::group_by(spot)%>%
-  summarize(top=quantile(logRatio,0.975,na.rm=T),bottom=quantile(logRatio,0.025,na.rm=T))
+  summarize(top=quantile(logRatio,0.95,na.rm=T),bottom=quantile(logRatio,0.05,na.rm=T))
 
 ##now determine if proteins are in top or bottom or none
 topTerms <- fulltab%>%left_join(limits)%>%
@@ -98,6 +98,9 @@ topTerms <- fulltab%>%left_join(limits)%>%
 ##how many top proteins in each spot? plot this
 ggplot(topTerms)+geom_jitter(aes(x=islet,y=logRatio,col=Islet_status))
 
+protCounts<-fulltab%>%group_by(spot)%>%summarize(totalProts=n_distinct(genename))
+topCounts<-topTerms%>%group_by(spot,Islet_status)%>%summarize(totalTop=n_distinct(genename))%>%full_join(protCounts)
+  
 
 ```
 
@@ -110,8 +113,9 @@ iterate over the top proteins in each voxel
 
 library(PCSF)
 data('STRING')
-runPcsfOnProts<-function(tab,spot){
-  terms<-tab$logRatio
+runPcsfOnProts<-function(tab,spot,nrand=10){
+  fname=paste0('spot',spot,'nrand',nrand)
+  terms<-abs(tab$logRatio)
   spot=unlist(spot)
 #  print(spot)
   gene<-tab$genename
@@ -123,11 +127,14 @@ runPcsfOnProts<-function(tab,spot){
   print(spot)
   nres<-data.frame(nodes=c(""),prizes=c(""),spot=spot)
   res<-NULL
-  try(res<-PCSF::PCSF_rand(ppi=ppi,terminals = terms,n=25))
-  if(!is.null(res) && length(vertex.attributes(res)$name)>1)
+  try(res<-PCSF::PCSF_rand(ppi=ppi,terminals = terms,n=nrand))
+  if(!is.null(res) && length(vertex.attributes(res)$name)>1){
+    write_graph(res,format='gml',file=paste0(fname,'.gml'))
+
     nres<-data.frame(nodes=vertex.attributes(res)$name,
                      prizes=vertex.attributes(res)$prize,
                      spot=spot)
+  }
   return(nres)
 }
 
@@ -151,11 +158,22 @@ toplot<-fulltab%>%dplyr::select(genename,spot,logRatio,Islet_status)%>%
   right_join(nets,by=c('nodes','spot'))
 ##for each list of proteins in each voxel network, identify overlap with expresion data
 
+
+net_counts<-nets%>%group_by(spot)%>%summarize(netProts=n_distinct(nodes))%>%
+  full_join(topCounts)%>%
+  tidyr::pivot_longer(cols=c(netProts,totalTop,totalProts),names_to='group',values_to='Number proteins')
+
+ggplot(net_counts,aes(x=Islet_status,y=`Number proteins`,col=group))+geom_jitter()
+
 ```
 
 
+This is kind of a bummer, as the networks appear to just be reducing the protein set.
 
 ## then plot PCA of new reduced expression set
+
+Plotting the PCA values of the proteins in the networks doesn't show much difference - whether we use prizes or expression.
+
 ```{r pca vals}
 
 ##PCA of prizes
@@ -207,9 +225,80 @@ print(p)
 ```
 
 
-## Diffuse network in NetdifusR
+## Use all proteins
 
+What if we just throw all proteins onto the network? will that help 'fill in the gap'?
+
+```{r big networks}
+
+
+
+#now build networks based on top terms alone 
+bigsnets<-fulltab%>%
+  dplyr::select(spot,genename,logRatio)%>%
+  mutate(nrand=10)%>%
+ # separate(protein,into=c('gene','human'),sep='_')%>%
+#  dplyr::select(spot,genename,logRatio)%>%
+  group_by(spot)%>%
+  dplyr::group_map(.f=runPcsfOnProts,.keep=FALSE)%>%
+  do.call(rbind,.)
+
+
+
+##PCA of prizes
+df<-bigsnets%>%dplyr::select(spot,prizes,nodes)%>%
+  mutate(prizes=as.numeric(prizes))%>%
+  distinct()%>%
+  tidyr::pivot_wider(names_from=spot,values_from = prizes,
+                     values_fill = list(prizes=0.0),
+                     values_fn = list(prizes=mean))%>%
+  tibble::column_to_rownames('nodes')
+
+mtab<-toplot%>%
+  dplyr::select(spot,Islet_status)%>%
+  distinct()%>%
+  subset(!is.na(Islet_status))%>%
+  tibble::column_to_rownames('spot')
+
+nac<-which(colMeans(df,na.rm=T)!=0)
+nar<-which(rowMeans(df,na.rm=T)!=0)
+pca_res <- prcomp(t(df[nar,nac]),scale.=TRUE,center = TRUE)
+
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
+
+
+##PCA of expression
+df2<-toplot%>%dplyr::select(spot,logRatio,nodes)%>%
+  mutate(logRatio=as.numeric(logRatio))%>%
+  distinct()%>%
+  replace_na(list(logRatio=0.0))%>%
+  tidyr::pivot_wider(names_from=spot,
+                     values_from = logRatio,
+                     values_fn =list(logRatio=mean),
+                     values_fill = list(logRatio=0.0))%>%
+  tibble::column_to_rownames('nodes')
+
+mtab2<-toplot%>%dplyr::select(spot,Islet_status)%>%
+  distinct()%>%
+  subset(!is.na(Islet_status))%>%
+  tibble::column_to_rownames('spot')
+
+nac<-which(colMeans(df2,na.rm=T)!=0)
+nar<-which(rowMeans(df2,na.rm=T)!=0)
+pca_res <- prcomp(t(df2[nar,nac]),scale.=TRUE,center = TRUE)
+
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
+```
+
+
+## Network diffusion?
+
+Vince will do this..
 ```{R diffuse network}
+
+
 
 ##let's borrow a bit from PCSF
 modstring <- STRING

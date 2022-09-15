@@ -1,0 +1,128 @@
+---
+title: "PCSF Tests"
+author: "Sara Gosline"
+date: "5/20/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+library(PCSF)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+## Building trees out of voxels
+
+The idea behind this approach is to build steiner trees out of individual voxels. In doing so we can make the voxels more functionally relevant. 
+
+```{r cars}
+
+syn=reticulate::import('synapseclient')
+sync=syn$login()
+
+tablist<-sync$tableQuery('select * from syn30806277')$asDataFrame()%>%
+  dplyr::select(id,islet)
+
+metadata <- sync$tableQuery('select * from syn30070462')$asDataFrame()%>%
+  mutate(s='S')%>%
+  unite(Islet_Number,s,Xcoord,Ycoord,sep='_',col='spot')
+
+up_map <- read.table("uniprotMap.txt",col.names=c('protein','genename'))
+fulltab<-do.call(rbind,apply(tablist,1,function(x)
+  read.table(sync$get(x[['id']])$path)%>%
+    mutate(islet=x[['islet']])))%>%
+  tibble::rownames_to_column('geneid')%>%
+  tidyr::separate(geneid,into=c('id','upid','protein'),
+                  sep='\\|')%>%
+  tidyr::pivot_longer(starts_with('S_'),
+                      names_to='Coords',
+                      values_to='logRatio')%>%
+  unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
+  left_join(metadata)%>%
+  left_join(up_map)
+
+```
+
+## PCA of each voxel
+
+How do the voxels compare to each other? 
+
+
+```{r pressure, echo=FALSE}
+library(ggfortify)
+
+df<-fulltab%>%dplyr::select(spot,logRatio,genename)%>%
+  distinct()%>%
+  subset(genename!='')%>%
+  tidyr::pivot_wider(names_from=spot,values_from = logRatio,
+                     values_fn = list(logRatio=mean))%>%
+  tibble::column_to_rownames('genename')
+
+mtab<-fulltab%>%dplyr::select(spot,islet,Coords,Plex,Islet_status)%>%
+  distinct()%>%
+  tibble::column_to_rownames('spot')
+
+nas<-which(apply(df,1,function(x) any(is.na(x))))
+
+pca_res <- prcomp(t(df[-nas,]),scale.=TRUE,center = TRUE, na.action=na.omit)
+
+##does not work yet
+p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+print(p)
+```
+
+
+## Get most expressed proteins in each voxel
+
+First we bracket the data into the top vs bottom proteins to see how they are expressed.
+
+
+```{r get top proteins}
+
+##group by islet, take top 2.5 and bottom 2.5% of proteins
+  
+limits <- fulltab%>%
+  dplyr::select(spot,logRatio)%>%
+  dplyr::group_by(spot)%>%
+  summarize(top=quantile(logRatio,0.95,na.rm=T),bottom=quantile(logRatio,0.05,na.rm=T))
+
+##now determine if proteins are in top or bottom or none
+topTerms <- fulltab%>%left_join(limits)%>%
+  mutate(isTop=logRatio>top)%>%
+  mutate(isBottom=logRatio<bottom)%>%
+  subset(isTop|isBottom)
+
+##how many top proteins in each spot? plot this
+ggplot(topTerms)+geom_jitter(aes(x=islet,y=logRatio,col=Islet_status))
+
+protCounts<-fulltab%>%group_by(spot)%>%summarize(totalProts=n_distinct(genename))
+topCounts<-topTerms%>%group_by(spot,Islet_status)%>%summarize(totalTop=n_distinct(genename))%>%full_join(protCounts)
+  
+
+```
+
+
+## Raw network properties of individual graphs
+
+Vince will do this..
+```{R diffuse network}
+
+
+data('STRING')
+##let's borrow a bit from PCSF
+modstring <- STRING
+modstring$cost <- 1-STRING$cost
+igraph_ppi <- construct_interactome(modstring)
+
+##https://github.com/USCCANA/netdiffuseR
+#or 
+###https://www.bioconductor.org/packages/devel/bioc/vignettes/diffuStats/inst/doc/diffuStats.pdf
+```
+## Now compare trees in PCA to see how they compare
+
+
+
+## can we use tree output as input? 
