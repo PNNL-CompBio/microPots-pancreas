@@ -12,67 +12,34 @@ library(PCSF)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
+setwd('..')
+source("loadHumanPancData.R")
 ```
 
 ## Building trees out of voxels
 
 The idea behind this approach is to build steiner trees out of individual voxels. In doing so we can make the voxels more functionally relevant. 
 
-```{r cars}
+```{r map ids}
 
-syn=reticulate::import('synapseclient')
-sync=syn$login()
 
-tablist<-sync$tableQuery('select * from syn30806277')$asDataFrame()%>%
-  dplyr::select(id,islet)
 
-metadata <- sync$tableQuery('select * from syn30070462')$asDataFrame()%>%
-  mutate(s='S')%>%
-  unite(Islet_Number,s,Xcoord,Ycoord,sep='_',col='spot')
+up_map <- read.table("../uniprotMap.txt",col.names=c('protein','genename'))
 
-up_map <- read.table("uniprotMap.txt",col.names=c('protein','genename'))
-fulltab<-do.call(rbind,apply(tablist,1,function(x)
-  read.table(sync$get(x[['id']])$path)%>%
-    mutate(islet=x[['islet']])))%>%
+fulltab<-crosstab2%>%
+  as.data.frame()%>%
   tibble::rownames_to_column('geneid')%>%
   tidyr::separate(geneid,into=c('id','upid','protein'),
                   sep='\\|')%>%
-  tidyr::pivot_longer(starts_with('S_'),
-                      names_to='Coords',
+  tidyr::pivot_longer(contains('_S_'),
+                      names_to='spot',
                       values_to='logRatio')%>%
-  unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
-  left_join(metadata)%>%
+  #unite(islet,Coords,sep='_',col='spot',remove = FALSE)%>%
+  left_join(tibble::rownames_to_column(isletMeta,'spot'))%>%
   left_join(up_map)
 
 ```
 
-## PCA of each voxel
-
-How do the voxels compare to each other? 
-
-
-```{r pressure, echo=FALSE}
-library(ggfortify)
-
-df<-fulltab%>%dplyr::select(spot,logRatio,genename)%>%
-  distinct()%>%
-  subset(genename!='')%>%
-  tidyr::pivot_wider(names_from=spot,values_from = logRatio,
-                     values_fn = list(logRatio=mean))%>%
-  tibble::column_to_rownames('genename')
-
-mtab<-fulltab%>%dplyr::select(spot,islet,Coords,Plex,Islet_status)%>%
-  distinct()%>%
-  tibble::column_to_rownames('spot')
-
-nas<-which(apply(df,1,function(x) any(is.na(x))))
-
-pca_res <- prcomp(t(df[-nas,]),scale.=TRUE,center = TRUE, na.action=na.omit)
-
-##does not work yet
-p<-autoplot(pca_res,data=mtab,colour='Islet_status')
-print(p)
-```
 
 
 ## Get most expressed proteins in each voxel
@@ -96,10 +63,10 @@ topTerms <- fulltab%>%left_join(limits)%>%
   subset(isTop|isBottom)
 
 ##how many top proteins in each spot? plot this
-ggplot(topTerms)+geom_jitter(aes(x=islet,y=logRatio,col=Islet_status))
+ggplot(topTerms)+geom_jitter(aes(x=spot,y=logRatio,col=IsletStatus))
 
 protCounts<-fulltab%>%group_by(spot)%>%summarize(totalProts=n_distinct(genename))
-topCounts<-topTerms%>%group_by(spot,Islet_status)%>%summarize(totalTop=n_distinct(genename))%>%full_join(protCounts)
+topCounts<-topTerms%>%group_by(spot,IsletStatus)%>%summarize(totalTop=n_distinct(genename))%>%full_join(protCounts)
   
 
 ```
@@ -152,18 +119,20 @@ nets<-topTerms%>%
 
 ##now join with data from original table
 ##map distance between each network?
-toplot<-fulltab%>%dplyr::select(genename,spot,logRatio,Islet_status)%>%
+toplot<-fulltab%>%dplyr::select(genename,spot,logRatio,IsletStatus)%>%
   #tidyr::separate(protein,into=c('nodes','hum'),sep='_')%>%
   dplyr::rename(nodes='genename')%>%
   right_join(nets,by=c('nodes','spot'))
 ##for each list of proteins in each voxel network, identify overlap with expresion data
 
 
-net_counts<-nets%>%group_by(spot)%>%summarize(netProts=n_distinct(nodes))%>%
+net_counts<-nets%>%
+  group_by(spot)%>%
+  summarize(netProts=n_distinct(nodes))%>%
   full_join(topCounts)%>%
   tidyr::pivot_longer(cols=c(netProts,totalTop,totalProts),names_to='group',values_to='Number proteins')
 
-ggplot(net_counts,aes(x=Islet_status,y=`Number proteins`,col=group))+geom_jitter()
+ggplot(net_counts,aes(x=IsletStatus,y=`Number proteins`,col=group))+geom_jitter()
 
 ```
 
@@ -186,16 +155,16 @@ df<-toplot%>%dplyr::select(spot,prizes,nodes)%>%
   tibble::column_to_rownames('nodes')
 
 mtab<-toplot%>%
-  dplyr::select(spot,Islet_status)%>%
+  dplyr::select(spot,IsletStatus)%>%
   distinct()%>%
-  subset(!is.na(Islet_status))%>%
+  subset(!is.na(IsletStatus))%>%
   tibble::column_to_rownames('spot')
 
 nac<-which(colMeans(df,na.rm=T)!=0)
 nar<-which(rowMeans(df,na.rm=T)!=0)
 pca_res <- prcomp(t(df[nar,nac]),scale.=TRUE,center = TRUE)
 
-p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+p<-autoplot(pca_res,data=mtab,colour='IsletStatus')
 print(p)
 
 
@@ -234,62 +203,62 @@ What if we just throw all proteins onto the network? will that help 'fill in the
 
 
 #now build networks based on top terms alone 
-bigsnets<-fulltab%>%
-  dplyr::select(spot,genename,logRatio)%>%
-  mutate(nrand=10)%>%
+#bigsnets<-fulltab%>%
+#  dplyr::select(spot,genename,logRatio)%>%
+#  mutate(nrand=10)%>%
  # separate(protein,into=c('gene','human'),sep='_')%>%
 #  dplyr::select(spot,genename,logRatio)%>%
-  group_by(spot)%>%
-  dplyr::group_map(.f=runPcsfOnProts,.keep=FALSE)%>%
-  do.call(rbind,.)
+#  group_by(spot)%>%
+#  dplyr::group_map(.f=runPcsfOnProts,.keep=FALSE)%>%
+#  do.call(rbind,.)
 
 
 
 ##PCA of prizes
-df<-bigsnets%>%dplyr::select(spot,prizes,nodes)%>%
-  mutate(prizes=as.numeric(prizes))%>%
-  distinct()%>%
-  tidyr::pivot_wider(names_from=spot,values_from = prizes,
-                     values_fill = list(prizes=0.0),
-                     values_fn = list(prizes=mean))%>%
-  tibble::column_to_rownames('nodes')
+#df<-bigsnets%>%dplyr::select(spot,prizes,nodes)%>%
+#  mutate(prizes=as.numeric(prizes))%>%
+#  distinct()%>%
+#  tidyr::pivot_wider(names_from=spot,values_from = prizes,
+#                     values_fill = list(prizes=0.0),
+#                     values_fn = list(prizes=mean))%>%
+#  tibble::column_to_rownames('nodes')
 
-mtab<-toplot%>%
-  dplyr::select(spot,Islet_status)%>%
-  distinct()%>%
-  subset(!is.na(Islet_status))%>%
-  tibble::column_to_rownames('spot')
+#mtab<-toplot%>%
+#  dplyr::select(spot,Islet_status)%>%
+#  distinct()%>%
+#  subset(!is.na(Islet_status))%>%
+#  tibble::column_to_rownames('spot')
 
-nac<-which(colMeans(df,na.rm=T)!=0)
-nar<-which(rowMeans(df,na.rm=T)!=0)
-pca_res <- prcomp(t(df[nar,nac]),scale.=TRUE,center = TRUE)
-
-p<-autoplot(pca_res,data=mtab,colour='Islet_status')
-print(p)
-
-
-##PCA of expression
-df2<-toplot%>%dplyr::select(spot,logRatio,nodes)%>%
-  mutate(logRatio=as.numeric(logRatio))%>%
-  distinct()%>%
-  replace_na(list(logRatio=0.0))%>%
-  tidyr::pivot_wider(names_from=spot,
-                     values_from = logRatio,
-                     values_fn =list(logRatio=mean),
-                     values_fill = list(logRatio=0.0))%>%
-  tibble::column_to_rownames('nodes')
-
-mtab2<-toplot%>%dplyr::select(spot,Islet_status)%>%
-  distinct()%>%
-  subset(!is.na(Islet_status))%>%
-  tibble::column_to_rownames('spot')
-
-nac<-which(colMeans(df2,na.rm=T)!=0)
-nar<-which(rowMeans(df2,na.rm=T)!=0)
-pca_res <- prcomp(t(df2[nar,nac]),scale.=TRUE,center = TRUE)
-
-p<-autoplot(pca_res,data=mtab,colour='Islet_status')
-print(p)
+# nac<-which(colMeans(df,na.rm=T)!=0)
+# nar<-which(rowMeans(df,na.rm=T)!=0)
+# pca_res <- prcomp(t(df[nar,nac]),scale.=TRUE,center = TRUE)
+# 
+# p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+# print(p)
+# 
+# 
+# ##PCA of expression
+# df2<-toplot%>%dplyr::select(spot,logRatio,nodes)%>%
+#   mutate(logRatio=as.numeric(logRatio))%>%
+#   distinct()%>%
+#   replace_na(list(logRatio=0.0))%>%
+#   tidyr::pivot_wider(names_from=spot,
+#                      values_from = logRatio,
+#                      values_fn =list(logRatio=mean),
+#                      values_fill = list(logRatio=0.0))%>%
+#   tibble::column_to_rownames('nodes')
+# 
+# mtab2<-toplot%>%dplyr::select(spot,Islet_status)%>%
+#   distinct()%>%
+#   subset(!is.na(Islet_status))%>%
+#   tibble::column_to_rownames('spot')
+# 
+# nac<-which(colMeans(df2,na.rm=T)!=0)
+# nar<-which(rowMeans(df2,na.rm=T)!=0)
+# pca_res <- prcomp(t(df2[nar,nac]),scale.=TRUE,center = TRUE)
+# 
+# p<-autoplot(pca_res,data=mtab,colour='Islet_status')
+# print(p)
 ```
 
 
