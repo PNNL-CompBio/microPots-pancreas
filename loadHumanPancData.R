@@ -62,6 +62,9 @@ crosstab2 <- crosstabList2 %>% purrr::reduce(full_join, by = "feature") %>%
   as.matrix()
 
 
+labels <- readxl::read_xlsx(syn$get('syn30070383')$path,sheet='Labels')%>%
+  tidyr::pivot_longer(-Plex,names_to='OtherPlex',values_to='mwDist')
+
 isletMeta <- isletMeta[colnames(crosstab), ]
 
 
@@ -92,7 +95,12 @@ plotLeapR<-function(leapr.result,subCat=NA){
   top20<-rbind(pos[1:10,],neg[1:10,])%>%
     subset(!is.na(zscore))%>%
     arrange(zscore)%>%
-    tibble::rownames_to_column('pathway')
+    tibble::rownames_to_column('pathway')%>%
+    mutate(pathway=stringr::str_replace_all(pathway,'_',' '))
+  
+  if(!is.na(subCat))
+    top20<-top20%>%
+    mutate(pathway=stringr::str_replace_all(pathway,subCat,''))
   
   top20$pathway<-factor(top20$pathway,levels=top20$pathway)
   if(fisher){
@@ -109,3 +117,7 @@ plotLeapR<-function(leapr.result,subCat=NA){
   p
 
 }
+
+
+###load go file
+gosigs <- leapR::read_gene_sets('GO_Biological_Process_2021.txt')
