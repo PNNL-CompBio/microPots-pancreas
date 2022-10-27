@@ -1,0 +1,108 @@
+---
+title: "Figure 4 - network analysis"
+author: "Sara Gosline"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Here we're hjoping to show that network integration enhances ability to identify undetected proteins.
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(purrr)
+library(devtools)
+#library(MSnSet.utils)
+if(!require(MSnSet.utils))
+  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
+library(ggplot2)
+library(ggfortify)
+library(cowplot)
+library(leapR)
+source('loadHumanPancData.R')
+```
+
+## Get diffex proteins
+
+We're just going to focus on teh pooled islet solution
+
+```{r cars}
+library(PCSF)
+data('STRING')
+m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+res4 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot", 
+                       coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", trend = T, robust = T) #plot = T?
+
+map<-read.table('uniprotMap.txt',header = TRUE)
+ 
+ # tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+#  left_join(map)%>%
+
+##TODO: summary table off differential expression with venn diagram
+res4<-res4%>%
+  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  left_join(map)%>%
+  subset(!is.na(To))
+
+sigIslet <- res4%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsOther=ifelse(sign(logFC)<0,'DownInIslet','UpInIslet'))%>%
+  dplyr::select(To,IsletVsOther,logFC)
+    # mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsOther',
+  #                                        values_from='upOrDown',values_fill=0)
+
+allFc<-res4$logFC
+names(allFc)<-res4$To
+
+ ppi <- construct_interactome(STRING)
+ nrand=100
+ upGene<-sigIslet%>%subset(IsletVsOther=='UpInIslet')%>%dplyr::select(logFC,To)%>%tibble::column_to_rownames('To')
+ upTerms<-upGene$logFC
+ names(upTerms)<-rownames(upGene)
+ 
+ downGene<-sigIslet%>%subset(IsletVsOther=='DownInIslet')%>%dplyr::select(logFC,To)%>%tibble::column_to_rownames('To')
+ 
+ downTerms<-abs(downGene$logFC)
+ names(downTerms)<-rownames(downGene)
+ 
+ upres<-NULL
+ try(upres<-PCSF::PCSF_rand(ppi=ppi,terminals = upTerms,b=.5,n=nrand))
+ if(!is.null(upres) && length(vertex.attributes(upres)$name)>1){
+      verts<-get.vertex.attribute(upres,'name')
+      fcVals<-allFc[verts]
+      fcVals[is.na(fcVals)]<-0
+      names(fcVals)<-verts
+ 
+   upres<-set.vertex.attribute(upres,'logFC',verts,fcVals)
+    write_graph(upres,format='gml',file=paste0('isletUpProts.gml'))
+
+ }
+  res<-NULL
+ try(res<-PCSF::PCSF_rand(ppi=ppi,terminals = downTerms,b=1,n=nrand))
+ if(!is.null(res) && length(vertex.attributes(res)$name)>1){
+      verts<-get.vertex.attribute(res,'name')
+      fcVals<-allFc[verts]
+      fcVals[is.na(fcVals)]<-0
+      names(fcVals)<-verts
+   res<-set.vertex.attribute(res,'logFC',verts,fcVals)
+
+    write_graph(res,format='gml',file=paste0('isletDownProts.gml'))
+}
+
+```
+
+
+Now we can summarize the nodes in the networks, including total number of proteins.
+
+```{r data summary}
+
+sum <- data.frame(Network=c('Uregulated','Downregulated'),
+                  TotalProteins=c(length(upTerms),length(downTerms)),
+                  InNetwork=c(length(V(upres)),length(V(res))),
+                  TerminalsSelected=c(length(which(get.vertex.attribute(upres,'type')=='Terminal')),
+                                      length(which(get.vertex.attribute(res,'type')=='Terminal'))))
+print(sum)
+                              
+
+```

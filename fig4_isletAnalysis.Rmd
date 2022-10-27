@@ -1,0 +1,340 @@
+---
+title: "Figure 3 Islet Activity"
+author: "Sara Gosline"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+
+
+```{r loading, echo=F, warning=F, message=F}
+library(dplyr)
+library(purrr)
+library(devtools)
+#library(MSnSet.utils)
+if(!require(MSnSet.utils))
+  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
+library(ggplot2)
+library(ggfortify)
+library(cowplot)
+library(leapR)
+source('loadHumanPancData.R')
+
+```
+
+## PCA depicts separation with Islet
+
+
+
+```{r pca}
+##l
+
+m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+p4=plot_pca(m2, phenotype = "IsletStatus",z_score=T)+ggtitle("Data by location") #check biplot = T?
+
+p6=plot_pca(m2, phenotype = "IsletNumber",z_score=T)+ggtitle("Data by Image") #check biplot = T?
+
+#cowplot::plot_grid(p4,p6)
+
+
+m3<- MSnSet(exprs = crosstab, pData = isletMeta)
+p5=plot_pca(m3, phenotype = "IsletStatus",z_score=T)+ggtitle("Centered data by location") #check biplot = T?
+
+p7=plot_pca(m3, phenotype = "IsletNumber",z_score=T)+ggtitle("Centered data by Image") #check biplot = T?
+
+cowplot::plot_grid(p4,p6,p5,p7)
+
+ggsave('PCAplots.pdf')
+```
+
+## Differential expression between all labeled areas shows strong islet signature 
+
+```{r diffex}
+
+#m1 <- MSnSet(exprs = crosstab, pData = isletMeta)
+#Run limma
+res <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+res2 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusProximal", trend = T, robust = T) #plot = T?
+
+
+res3 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+res4 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot", 
+                       coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", trend = T, robust = T) #plot = T?
+
+##TODO: summary table off differential expression with venn diagram
+sigIslet <- res4%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsOther=ifelse(sign(logFC)<0,'DownInIslet','UpInIslet'))%>%
+  dplyr::select(feature,IsletVsOther)%>%
+   mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsOther',
+                                          values_from='upOrDown',values_fill=0)
+
+
+sigIsletDistal<-res3%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsIslet','UpInIsletVsDistal'))%>%
+  dplyr::select(feature,IsletVsDistal)%>%
+  mutate(upOrDown=1)%>%
+  tidyr::pivot_wider(names_from='IsletVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+
+sigIsletProximal<-res2%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsProximal=ifelse(sign(logFC)<0,'UpInProximalVsIslet','UpInIsletVsProximal'))%>%
+  dplyr::select(feature,IsletVsProximal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsProximal',
+                                          values_from='upOrDown',values_fill=0)
+
+sigProxDistal<-res%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(ProximalVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsProximal','UpInProximalVsDistal'))%>%
+  dplyr::select(feature,ProximalVsDistal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='ProximalVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+
+#baseline = res3%>%dplyr::select(feature)%>%mutate(base=0)
+
+comb.res<-sigIslet%>%
+  full_join(sigIsletDistal)%>%
+  full_join(sigIsletProximal)%>%
+  full_join(sigProxDistal)
+
+all.cols<-setdiff(colnames(comb.res),'feature')
+navals<-rep(0,length(all.cols))
+names(navals)<-all.cols
+
+ comb.res<-tidyr::replace_na(comb.res,as.list(navals))
+ 
+ library(UpSetR)
+ pdf('diffExOverlapUnnormalized.pdf',onefile=F,height=4)
+ upset(as.data.frame(comb.res),sets=all.cols)
+ dev.off()
+
+
+```
+
+Now do the differential expression with the normalized data
+
+```{r diffex norm}
+
+#m1 <- MSnSet(exprs = crosstab, pData = isletMeta)
+#Run limma
+nres <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+nres2 <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusProximal", trend = T, robust = T) #plot = T?
+
+
+nres3 <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+nres4 <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletOrNot", 
+                       coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", trend = T, robust = T) #plot = T?
+
+##TODO: summary table off differential expression with venn diagram
+sigIslet <- nres4%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsOther=ifelse(sign(logFC)<0,'DownInIslet','UpInIslet'))%>%
+  dplyr::select(feature,IsletVsOther)%>%
+   mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsOther',
+                                          values_from='upOrDown',values_fill=0)
+
+sigIsletDistal<-nres3%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsIslet','UpInIsletVsDistal'))%>%
+  dplyr::select(feature,IsletVsDistal)%>%
+  mutate(upOrDown=1)%>%
+  tidyr::pivot_wider(names_from='IsletVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+sigIsletProximal<-nres2%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(IsletVsProximal=ifelse(sign(logFC)<0,'UpInProximalVsIslet','UpInIsletVsProximal'))%>%
+  dplyr::select(feature,IsletVsProximal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsProximal',
+                                          values_from='upOrDown',values_fill=0)
+
+sigProxDistal<-nres%>%
+  tibble()%>%
+  subset(adj.P.Val<0.05)%>%
+  mutate(ProximalVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsProximal','UpInProximalVsDistal'))%>%
+  dplyr::select(feature,ProximalVsDistal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='ProximalVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+
+comb.res<-sigIslet%>%
+  full_join(sigIsletDistal)%>%
+  full_join(sigIsletProximal)%>%
+  full_join(sigProxDistal)
+
+all.cols<-setdiff(colnames(comb.res),'feature')
+navals<-rep(0,length(all.cols))
+names(navals)<-all.cols
+
+ comb.res<-tidyr::replace_na(comb.res,as.list(navals))
+ 
+ library(UpSetR)
+ pdf('diffExOverlapNormalized.pdf',onefile=F,height=4)
+ upset(as.data.frame(comb.res),sets=all.cols)
+ dev.off()
+
+
+```
+
+## GSEA and GO enrichment show distinct activity
+
+You can also embed plots, for example:
+
+```{r leapR enrichment, message=F, warning=F}
+
+
+library(leapR)
+
+#data("ncipid")
+data('krbpaths')
+##map features to Gene Names
+map<-read.table('uniprotMap.txt',header = TRUE)
+ 
+islet<-res4%>%
+  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  left_join(map)%>%
+  dplyr::select(logFC,adj.P.Val,To)%>%
+  subset(!is.na(logFC))%>%
+  subset(!is.na(To))%>%
+  distinct()
+
+##now remove dupes
+dupes<-islet$To[which(duplicated(islet$To))]
+
+non.dupes<-islet%>%
+  subset(!To%in%dupes)
+
+fixed.dupes<-islet%>%
+    subset(To%in%dupes)%>%
+    group_by(To,.drop=F)%>%
+    summarize(minP=min(adj.P.Val))%>%
+    left_join(islet)%>%
+    subset(minP==adj.P.Val)%>%
+  dplyr::select(-minP)
+
+full.islet<-rbind(non.dupes,fixed.dupes)%>%
+  tibble::column_to_rownames('To')%>%
+  arrange(desc(logFC))
+
+top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.05),logFC>0)$logFC)
+bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.05),logFC<0)$logFC)
+
+###
+##create matrix
+go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',
+                 primary_columns='logFC',
+                 minsize=10)%>%
+  subset(BH_pvalue<0.01)%>%
+  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+  arrange(BH_pvalue)
+
+p<-plotLeapR(go.order.res,'GO')
+
+p
+ggsave('gseaResultsIsletGO_unnorm.pdf',width=10)
+
+reac.order.res<-leapR(datamatrix=full.islet,krbpaths,'enrichment_in_order',
+                 primary_columns='logFC',
+                 minsize=10)%>%
+  subset(BH_pvalue<0.01)%>%
+  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+  arrange(BH_pvalue)
+
+p<-plotLeapR(reac.order.res,'REACTOME')
+
+p
+ggsave('gseaResultsIsletreactome_uunnorm.pdf',width=10)
+
+
+```
+
+Redo the same analysis for normalized
+
+```{r normalized leapR enrichment, message=F, warning=F}
+
+
+##map features to Gene Names
+map<-read.table('uniprotMap.txt',header = TRUE)
+ 
+islet<-nres4%>%
+  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  left_join(map)%>%
+  dplyr::select(logFC,adj.P.Val,To)%>%
+  subset(!is.na(logFC))%>%
+  subset(!is.na(To))%>%
+  distinct()
+
+##now remove dupes
+dupes<-islet$To[which(duplicated(islet$To))]
+
+non.dupes<-islet%>%
+  subset(!To%in%dupes)
+
+fixed.dupes<-islet%>%
+    subset(To%in%dupes)%>%
+    group_by(To,.drop=F)%>%
+    summarize(minP=min(adj.P.Val))%>%
+    left_join(islet)%>%
+    subset(minP==adj.P.Val)%>%
+  dplyr::select(-minP)
+
+full.islet<-rbind(non.dupes,fixed.dupes)%>%
+  tibble::column_to_rownames('To')%>%
+  arrange(desc(logFC))
+
+top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.05),logFC>0)$logFC)
+bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.05),logFC<0)$logFC)
+
+###
+##create matrix
+n.go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',
+                 primary_columns='logFC',
+                 minsize=10)%>%
+  subset(BH_pvalue<0.01)%>%
+  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+  arrange(BH_pvalue)
+
+p<-plotLeapR(n.go.order.res,'GO')
+
+p
+
+ggsave('gseaResultsIsletGO_norm.pdf',width=10)
+
+n.reac.order.res<-leapR(datamatrix=full.islet,krbpaths,'enrichment_in_order',
+                 primary_columns='logFC',
+                 minsize=10)%>%
+  subset(BH_pvalue<0.01)%>%
+  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+  arrange(BH_pvalue)
+
+p<-plotLeapR(n.reac.order.res,)
+
+p
+ggsave('gseaResultsIsletreactome_norm.pdf',width=10)
+
+
+```
+
