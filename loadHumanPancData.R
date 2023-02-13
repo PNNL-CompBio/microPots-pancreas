@@ -62,6 +62,9 @@ crosstab2 <- crosstabList2 %>% purrr::reduce(full_join, by = "feature") %>%
   as.matrix()
 
 
+labels <- readxl::read_xlsx(syn$get('syn30070383')$path,sheet='Labels')%>%
+  tidyr::pivot_longer(-Plex,names_to='OtherPlex',values_to='mwDist')
+
 isletMeta <- isletMeta[colnames(crosstab), ]
 
 
@@ -92,7 +95,12 @@ plotLeapR<-function(leapr.result,subCat=NA){
   top20<-rbind(pos[1:10,],neg[1:10,])%>%
     subset(!is.na(zscore))%>%
     arrange(zscore)%>%
-    tibble::rownames_to_column('pathway')
+    tibble::rownames_to_column('pathway')%>%
+    mutate(pathway=stringr::str_replace_all(pathway,'_',' '))
+  
+  if(!is.na(subCat))
+    top20<-top20%>%
+    mutate(pathway=stringr::str_replace_all(pathway,subCat,''))
   
   top20$pathway<-factor(top20$pathway,levels=top20$pathway)
   if(fisher){
@@ -109,3 +117,74 @@ plotLeapR<-function(leapr.result,subCat=NA){
   p
 
 }
+
+metadata <- isletMeta%>%
+  select(IsletStatus,IsletOrNot,Plex,`Grid Number`)%>%
+  tibble::rownames_to_column('Spot')
+
+normtab <- do.call(rbind,lapply(crosstabList,function(x){
+  newx<-x%>%
+    tidyr::separate(feature,into=c('id','upid','protein'),
+                    sep='\\|')%>%
+    dplyr::select(-c(id,upid))
+  #ibble::column_to_rownames('protein')
+  newx<-newx%>%
+    tidyr::pivot_longer(2:ncol(newx),names_to='Spot', values_to='logRatio')%>%
+    tidyr::separate(Spot,into=c('Image','S','Xcoord','Ycoord'),sep='_',remove=F)%>%
+    dplyr::select(-S)
+  newx
+})
+)%>%
+  left_join(metadata)
+
+
+fulltab <- do.call(rbind,lapply(crosstabList2,function(x){
+  newx<-x%>%
+    tidyr::separate(feature,into=c('id','upid','protein'),
+                    sep='\\|')%>%
+    dplyr::select(-c(id,upid))
+  #ibble::column_to_rownames('protein')
+  newx<-newx%>%
+    tidyr::pivot_longer(2:ncol(newx),names_to='Spot', values_to='logRatio')%>%
+    tidyr::separate(Spot,into=c('Image','S','Xcoord','Ycoord'),sep='_',remove=F)%>%
+    dplyr::select(-S)
+  newx
+})
+)%>%
+  left_join(metadata)
+
+##now save the fulltab to supp data table 1
+
+write.table(fulltab,'suppTable1.csv',sep=',',quote=F,row.names=F)
+
+#' Created a function that fixed missing proteins by median expressio
+#' and return matrix
+correctMissingProteins<-function(fulltab){
+  samp_avgs<-fulltab%>%
+    dplyr::mutate(Grid=as.factor(`Grid Number`))%>%
+    dplyr::group_by(Spot,Image,Grid,IsletOrNot)%>%
+    dplyr::summarize(medExp=median(logRatio,na.rm=T))
+  
+  #now we deal with the larger crosstab matrix
+  crosstab<-fulltab%>%
+    dplyr::select(Spot,protein,logRatio)%>%
+    tidyr::pivot_wider(names_from='Spot',values_from='logRatio')%>%
+    tibble::column_to_rownames('protein')
+  
+  ##now we have to update the median expression again
+  fixed.crosstab<-do.call('rbind',lapply(rownames(crosstab),function(x){
+    avg<-subset(prot_avgs,protein==x)[,'medExp']
+    protvals<-crosstab[x,]
+    protvals[is.na(protvals)]<-unlist(avg)
+    protvals
+  }))%>%
+    as.matrix()
+  
+  var0<-which(apply(fixed.crosstab,1,var)==0)
+  if(length(var0)>0)
+    fixed.crosstab<-fixed.crosstab[-var0,]
+  return(fixed.crosstab)
+}
+
+###load go file
+gosigs <- leapR::read_gene_sets('GO_Biological_Process_2021.txt')

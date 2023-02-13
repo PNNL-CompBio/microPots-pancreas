@@ -42,7 +42,7 @@ res.orig <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus",
 
 Any pathways of interest? 
 
-```{r pressure, echo=FALSE}
+```{r pressure, echo=FALSE, message=F, warning=F}
 data('krbpaths')
 ##map features to Gene Names
 map<-read.table('uniprotMap.txt',header = TRUE)
