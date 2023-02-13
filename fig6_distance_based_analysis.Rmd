@@ -38,15 +38,22 @@ long.tab<-exprs(m2)%>%
   left_join(tibble::rownames_to_column(isletMeta,'sample'))%>%
   dplyr::select(protein,`sample`,logFC,`Distance to islet`,`Islet Number`)
   
+ct<-function(x,y,method){
+  ret=NA
+  try(ret<-cor.test(x,y,method=method)$p.value)
+  ret
+}
+
 cor.vals<-long.tab%>%
-  group_by(protein,`Islet Number`)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'))
-
-
+  group_by(protein)%>%
+  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'),
+            corTest=ct(logFC,`Distance to islet`,method='pearson'))
+      
   
 cor.na.vals<-long.tab%>%
-  group_by(protein,`Islet Number`)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,method='spearman'))
+  group_by(protein)%>%
+  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
+            corTest=ct(logFC,`Distance to islet`,method='spearman'))
 
 
 ##which ones are highly anti-correlated

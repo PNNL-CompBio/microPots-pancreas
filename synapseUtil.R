@@ -7,16 +7,20 @@
 ##
 
 #####Synapse python client wrapper files
-
+condaenv='synapse'
 #' @export
 loadSynapse<-function(){
-  library(reticulate)
-  have_synapse <- reticulate::py_module_available("synapseclient")
-     if (!have_synapse)
-       reticulate::py_install("synapseclient")
+  #library(reticulate)
+  #have_synapse <- reticulate::py_module_available("synapseclient")
+  #   if (!have_synapse)
+  #library(reticulate)
+  reticulate::use_condaenv('/Users/gosl241/miniconda3/envs/synapse/bin/python')
+  synapseclient<-reticulate::import('synapseclient')
+  synapseclient$login()
+  
    
-   syn_client <<-
-     reticulate::import("synapseclient", delay_load = TRUE)$login()
+  # syn_client <<-
+  #   reticulate::import("synapseclient", delay_load = TRUE)$login()
 }
 
 #' Logs into Synapse using local information
@@ -25,8 +29,8 @@ loadSynapse<-function(){
 #' @return Synapse login python entity
 #' @export
 synapseLogin<-function(){
-  library(reticulate)
- # reticulate::use_condaenv(condaenv)
+ # library(reticulate)
+ reticulate::use_condaenv(condaenv)
   syn=reticulate::import('synapseclient')
   sync=syn$login()
 }
@@ -38,8 +42,7 @@ synapseLogin<-function(){
 #' @param parentId of folder to store
 #' @export
 synapseStore<-function(path,parentId){
-  library(reticulate)
- # reticulate::use_condaenv(condaenv)
+  reticulate::use_condaenv(condaenv)
 
   synapse=reticulate::import('synapseclient')
   sync=synapse$login()
@@ -57,7 +60,7 @@ synapseStore<-function(path,parentId){
 #' @export
 synTableStore<-function(tab,tabname,parentId='syn22128879'){
   #we have to first write the table to a file, then build it and store it
-  library(reticulate)
+  #library(reticulate)
   print(head(tab))
   fpath=write.table(tab,file='tmp.csv',sep=',',row.names = FALSE,quote=FALSE)
  # reticulate::use_condaenv(condaenv)

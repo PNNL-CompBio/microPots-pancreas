@@ -118,6 +118,73 @@ plotLeapR<-function(leapr.result,subCat=NA){
 
 }
 
+metadata <- isletMeta%>%
+  select(IsletStatus,IsletOrNot,Plex,`Grid Number`)%>%
+  tibble::rownames_to_column('Spot')
+
+normtab <- do.call(rbind,lapply(crosstabList,function(x){
+  newx<-x%>%
+    tidyr::separate(feature,into=c('id','upid','protein'),
+                    sep='\\|')%>%
+    dplyr::select(-c(id,upid))
+  #ibble::column_to_rownames('protein')
+  newx<-newx%>%
+    tidyr::pivot_longer(2:ncol(newx),names_to='Spot', values_to='logRatio')%>%
+    tidyr::separate(Spot,into=c('Image','S','Xcoord','Ycoord'),sep='_',remove=F)%>%
+    dplyr::select(-S)
+  newx
+})
+)%>%
+  left_join(metadata)
+
+
+fulltab <- do.call(rbind,lapply(crosstabList2,function(x){
+  newx<-x%>%
+    tidyr::separate(feature,into=c('id','upid','protein'),
+                    sep='\\|')%>%
+    dplyr::select(-c(id,upid))
+  #ibble::column_to_rownames('protein')
+  newx<-newx%>%
+    tidyr::pivot_longer(2:ncol(newx),names_to='Spot', values_to='logRatio')%>%
+    tidyr::separate(Spot,into=c('Image','S','Xcoord','Ycoord'),sep='_',remove=F)%>%
+    dplyr::select(-S)
+  newx
+})
+)%>%
+  left_join(metadata)
+
+##now save the fulltab to supp data table 1
+
+write.table(fulltab,'suppTable1.csv',sep=',',quote=F,row.names=F)
+
+#' Created a function that fixed missing proteins by median expressio
+#' and return matrix
+correctMissingProteins<-function(fulltab){
+  samp_avgs<-fulltab%>%
+    dplyr::mutate(Grid=as.factor(`Grid Number`))%>%
+    dplyr::group_by(Spot,Image,Grid,IsletOrNot)%>%
+    dplyr::summarize(medExp=median(logRatio,na.rm=T))
+  
+  #now we deal with the larger crosstab matrix
+  crosstab<-fulltab%>%
+    dplyr::select(Spot,protein,logRatio)%>%
+    tidyr::pivot_wider(names_from='Spot',values_from='logRatio')%>%
+    tibble::column_to_rownames('protein')
+  
+  ##now we have to update the median expression again
+  fixed.crosstab<-do.call('rbind',lapply(rownames(crosstab),function(x){
+    avg<-subset(prot_avgs,protein==x)[,'medExp']
+    protvals<-crosstab[x,]
+    protvals[is.na(protvals)]<-unlist(avg)
+    protvals
+  }))%>%
+    as.matrix()
+  
+  var0<-which(apply(fixed.crosstab,1,var)==0)
+  if(length(var0)>0)
+    fixed.crosstab<-fixed.crosstab[-var0,]
+  return(fixed.crosstab)
+}
 
 ###load go file
 gosigs <- leapR::read_gene_sets('GO_Biological_Process_2021.txt')
