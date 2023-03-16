@@ -7,18 +7,19 @@
 ##
 
 #####Synapse python client wrapper files
-condaenv='synapse'
+#condaenv='C:\\Users\\gosl241\\AppData\\Local\\r-miniconda\\envs\\synapseclient'
 #' @export
 loadSynapse<-function(){
   #library(reticulate)
   #have_synapse <- reticulate::py_module_available("synapseclient")
   #   if (!have_synapse)
   #library(reticulate)
-  reticulate::use_condaenv('/Users/gosl241/miniconda3/envs/synapse/bin/python')
-  synapseclient<-reticulate::import('synapseclient')
-  synapseclient$login()
+  reticulate::use_virtualenv('r-reticulate')
   
-   
+ # reticulate::use_condaenv(condaenv)
+  synapseclient<-reticulate::import('synapseclient')
+  syn<-synapseclient$login()
+   return(syn)
   # syn_client <<-
   #   reticulate::import("synapseclient", delay_load = TRUE)$login()
 }
@@ -30,9 +31,13 @@ loadSynapse<-function(){
 #' @export
 synapseLogin<-function(){
  # library(reticulate)
- reticulate::use_condaenv(condaenv)
-  syn=reticulate::import('synapseclient')
-  sync=syn$login()
+ #reticulate::use_condaenv(condaenv)
+  reticulate::use_virtualenv('r-reticulate')
+  
+  # reticulate::use_condaenv(condaenv)
+  synapseclient<-reticulate::import('synapseclient')
+  syn<-synapseclient$login()
+  return(syn)
 }
 
 #' Synapse store
@@ -42,7 +47,7 @@ synapseLogin<-function(){
 #' @param parentId of folder to store
 #' @export
 synapseStore<-function(path,parentId){
-  reticulate::use_condaenv(condaenv)
+#  reticulate::use_condaenv(condaenv)
 
   synapse=reticulate::import('synapseclient')
   sync=synapse$login()

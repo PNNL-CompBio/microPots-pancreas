@@ -9,9 +9,7 @@ output: html_document
 library(dplyr)
 library(purrr)
 library(devtools)
-#library(MSnSet.utils)
-if(!require(MSnSet.utils))
-  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
 
 library(ggplot2)
 library(ggfortify)
@@ -23,16 +21,17 @@ source('loadHumanPancData.R')
 ## Map to distances
 get data and metadata nad join to get distance data
 
-```{r distnace data, message=FALSE, warning=FALSE}
+```{r distnace data, message=FALSE, warning=FALSE, message=FALSE,error=FALSE}
 
-m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+#m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+
+fixed.crosstab<-correctMissingProteins(fulltab)
 
 
-
-long.tab<-exprs(m2)%>%
+long.tab<-fixed.crosstab%>%#exprs(m2)%>%
   as.data.frame()%>%
   tibble::rownames_to_column('protein')%>%
-  tidyr::pivot_longer(cols=c(1:ncol(exprs(m2))+1),
+  tidyr::pivot_longer(cols=c(1:ncol(fixed.crosstab)+1),
                       names_to='sample',
                       values_to='logFC')%>%
   left_join(tibble::rownames_to_column(isletMeta,'sample'))%>%
@@ -45,16 +44,16 @@ ct<-function(x,y,method){
 }
 
 cor.vals<-long.tab%>%
-  group_by(protein)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'),
+  dplyr::group_by(protein,`Islet Number`)%>%
+  dplyr::summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'),
             corTest=ct(logFC,`Distance to islet`,method='pearson'))
-      
+
+
   
 cor.na.vals<-long.tab%>%
-  group_by(protein)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
+  dplyr::group_by(protein,`Islet Number`)%>%
+  dplyr::summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
             corTest=ct(logFC,`Distance to islet`,method='spearman'))
-
 
 ##which ones are highly anti-correlated
 ```
@@ -71,38 +70,41 @@ map<-read.table('uniprotMap.txt',header = TRUE)
 #  left_join(map)%>%
 
 ##TODO: summary table off differential expression with venn diagram
-cor.names<-cor.vals%>%
-  tidyr::separate(protein,sep='\\|',into=c('sp','id','From'))%>%
+cor.names<-cor.na.vals%>%
+#  tidyr::separate(protein,sep='',into=c('sp','id','From'))%>%
+  dplyr::rename(From='protein')%>%
   left_join(map)%>%
   subset(!is.na(To))
 
-#%>%
-#  arrange(corVal)
 
 cor.mat<-cor.names%>%
+  dplyr::ungroup()%>%
+  dplyr::select(-c(corTest,From))%>%
   dplyr::mutate(`Islet Number`=as.character(`Islet Number`))%>%
-  tidyr::pivot_wider(names_from=`Islet Number`,values_from=corVal)#%>%
+  tidyr::pivot_wider(names_from=`Islet Number`,values_from=corVal,values_fn=list(corVal=mean))#%>%
 #  tibble::column_to_rownames('To')
 
 ##now remove dupes
-dupes<-cor.mat$To[which(duplicated(cor.mat$To))]
+if(any(duplicated(cor.mat$To))){
+  dupes<-cor.mat$To[which(duplicated(cor.mat$To))]
 
-cor.mat<-cor.mat%>%
-  subset(!To%in%dupes)%>%
-  tibble::column_to_rownames('To')
+  cor.mat<-cor.mat%>%
+    subset(!To%in%dupes)%>%
+    tibble::column_to_rownames('To')
+}
 
-library(ggfortify)
+#library(ggfortify)
+#
+#dm <- as.matrix(cor.mat[,3:9])
+#keep<-apply(dm,1,function(x) !any(is.na(x)))
 
-dm <- as.matrix(cor.mat[,4:10])
-keep<-apply(dm,1,function(x) !any(is.na(x)))
-
-pc.vals<-prcomp(t(dm[keep,]))
+#pc.vals<-prcomp(t(dm[keep,]))
 ###how do the values work in 2 dimensions?
 
 hist(cor.names$corVal)
 
-autoplot(pc.vals,label=TRUE)
-ggsave('correlationPCA.pdf')
+#autoplot(pc.vals,label=TRUE)
+#ggsave('correlationPCA.pdf')
 ```
 
 now we have all the correlation values
@@ -112,24 +114,24 @@ library(leapR)
 library(pheatmap)
 #data("ncipid")
 
-go.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),
-                       function(x) {
-                         leapR(datamatrix=cor.mat,gosigs,'enrichment_in_order',
-                 primary_columns=x,minsize=10)%>%
-  subset(BH_pvalue<0.05)%>%
-#  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
-  arrange(BH_pvalue)%>%
-  mutate(image=x)%>%tibble::rownames_to_column('Pathway')
-                        })
+go.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),function(x) {
+  print(x)
+               leapR(datamatrix=as.data.frame(cor.mat),gosigs,'enrichment_in_order',
+                     primary_columns=x,id_column='To')%>%
+               subset(pvalue<0.01)%>%
+  #  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+              mutate(image=x)%>%
+               tibble::rownames_to_column('Pathway')
+              })
 
 go.order.tab<-do.call(rbind,go.order.res)%>%
-#  subset(BH_pvalue<0.05)%>%
+  #subset(pvalue<0.05)%>%
   dplyr::select(Pathway,zscore,image)%>%
   mutate(Pathway=stringr::str_replace_all(Pathway," \\(GO:[0-9]*\\)",''))%>%
   tidyr::pivot_wider(names_from='image',values_from='zscore',values_fill=list(zscore=0.0))%>%
   tibble::column_to_rownames('Pathway')
   
-terms<-which(apply(go.order.tab,1,function(x) length(which(x==0))<4))
+terms<-which(apply(go.order.tab,1,function(x) length(which(x==0))<3))
 
 pheatmap(go.order.tab[names(terms),],cellwidth = 10,cellheight=10,filename = 'goBPterms.pdf')
 ```
@@ -141,20 +143,15 @@ now lets do kegg
 data('krbpaths')
 
 
-kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),
-                       function(x) {
-                         leapR(datamatrix=cor.mat,krbpaths,'enrichment_in_order',
-                 primary_columns=x,
-                 minsize=5)%>%
-  subset(BH_pvalue<0.05)%>%
-                           
-#  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
-  arrange(BH_pvalue)%>%
-                           
-  mutate(image=x)%>%  
-                           tibble::rownames_to_column('pathway')
-
-                         })
+kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)), function(x) {
+  print(x)
+  leapR(datamatrix=as.data.frame(cor.mat),krbpaths,'enrichment_in_order',
+                  primary_columns=x,id_column='To')%>%
+    subset(pvalue<0.01)%>%
+  #  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+    dplyr::mutate(image=x)%>%  
+    tibble::rownames_to_column('pathway')
+})
 
 krb.order.tab<-do.call(rbind,kegg.order.res)%>%
 #  subset(BH_pvalue<0.05)%>%

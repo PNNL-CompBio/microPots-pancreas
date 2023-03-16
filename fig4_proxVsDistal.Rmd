@@ -25,15 +25,20 @@ source('loadHumanPancData.R')
 
 Let's double check to see if we can find proximal vs. distal differential expression
 
-```{r cars}
-m2<- MSnSet(exprs = crosstab, pData = isletMeta)
-m3<- MSnSet(exprs = crosstab2, pData = isletMeta)
+```{r diffex}
+#m3<- MSnSet(exprs = crosstab2, pData = isletMeta)
 
-res.norm <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus", 
-                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
+fixed.crosstab<-correctMissingProteins(fulltab)
+m2<- MSnSet(exprs = fixed.crosstab, pData = isletMeta)
 
-res.orig <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
-                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
+res.fixed <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot + IsletNumber", 
+                       coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", 
+                       trend = T, robust = T) #plot = T?
+
+res.fixed <- res.fixed%>%
+  mutate(signif=(adj.P.Val<0.01)&abs(logFC)>1)
+#res.orig <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
+#                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
 
 
 ```
@@ -50,61 +55,84 @@ map<-read.table('uniprotMap.txt',header = TRUE)
 
 doEnrich<-function(res,prefix=''){
   islet<-res%>%
-  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
-  left_join(map)%>%
-  dplyr::select(logFC,P.Value,adj.P.Val,To)%>%
-  subset(!is.na(logFC))%>%
-  subset(!is.na(To))%>%
-  distinct()
+    # tidyr::separate(feature,sep='_',into=c('From','spec'))%>%
+    dplyr::rename(From='feature')%>%
+    left_join(map)%>%
+    dplyr::select(logFC,P.Value,adj.P.Val,To)%>%
+    subset(!is.na(logFC))%>%
+    subset(!is.na(To))%>%
+    distinct()
 
-##now remove dupes
-dupes<-islet$To[which(duplicated(islet$To))]
+  ##now remove dupes
+  dupes<-islet$To[which(duplicated(islet$To))]
 
-non.dupes<-islet%>%
-  subset(!To%in%dupes)
+  non.dupes<-islet%>%
+    subset(!To%in%dupes)
 
-fixed.dupes<-islet%>%
-    subset(To%in%dupes)%>%
-    group_by(To,.drop=F)%>%
-    summarize(minP=min(P.Value))%>%
-    left_join(islet)%>%
-    subset(minP==P.Value)%>%
-  dplyr::select(-minP)
+  fixed.dupes<-islet%>%
+      subset(To%in%dupes)%>%
+      dplyr::group_by(To,.drop=F)%>%
+      dplyr::summarize(minP=min(P.Value))%>%
+      left_join(islet)%>%
+      subset(minP==P.Value)%>%
+    dplyr::select(-minP)
 
-full.islet<-rbind(non.dupes,fixed.dupes)%>%
-  tibble::column_to_rownames('To')%>%
-  arrange(desc(logFC))
+  full.islet<-rbind(non.dupes,fixed.dupes)%>%
+  #  tibble::column_to_rownames('To')%>%
+    arrange(desc(logFC))
 
-top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.05),logFC>0)$logFC)
-bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.05),logFC<0)$logFC)
+  rownames(full.islet)<-full.islet$To
+  
+  top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.05),logFC>0)$logFC)
+  bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.05),logFC<0)$logFC)
+    
+  ###
+  ##create matrix
+  order.res<-leapR(datamatrix=as.data.frame(full.islet),krbpaths,'enrichment_in_order',
+                   primary_columns='logFC',id_column='To')%>%
+  # subset(pvalue<0.05)%>%
+    subset(BH_pvalue<0.2)%>%
+    dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,pvalue,zscore)%>%
+    arrange(pvalue)
 
-###
-##create matrix
-order.res<-leapR(datamatrix=full.islet,krbpaths,'enrichment_in_order',primary_columns='logFC',minsize=5)%>%
-  subset(pvalue<0.05)%>%
-  #subset(BH_pvalue<0.2)%>%
-  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,pvalue,zscore)%>%
-  arrange(pvalue)
+  #print(order.res)
+  p<-plotLeapR(order.res,'REACTOME')
+  ggsave(paste0('REACTOME',prefix,'_enrichment.pdf'),p,width=12)
+#rownames(full.islet)<-full.islet$To
 
-p<-plotLeapR(order.res,'REACTOME')
-ggsave(paste0('REACTOME',prefix,'_enrichment.pdf'),p,width=12)
+  go.set.upreg<-leapR(datamatrix=as.data.frame(full.islet),gosigs,'enrichment_in_sets',
+                    primary_columns='logFC',id_column='To',threshold=1,
+                    greaterthan=TRUE)%>%
+       subset(BH_pvalue<0.01)%>%
+    dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
+    dplyr::arrange(pvalue)
 
-
-
-go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',primary_columns='logFC',minsize=5)%>%
-  subset(pvalue<0.05)%>%
-#t(BH_pvalue<0.2)%>%
-  dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,zscore)%>%
-  arrange(pvalue)
-
-p<-plotLeapR(go.order.res,'GO')
-p
-ggsave(paste0('GO',prefix,'_enrichment.pdf'),p,width=12)
+    go.set.downreg<-leapR(datamatrix=as.data.frame(full.islet),gosigs,'enrichment_in_sets',
+                    primary_columns='logFC',id_column='To',threshold=(-1),
+                    greaterthan=FALSE)%>%
+       subset(BH_pvalue<0.05)%>%
+    dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
+    dplyr::arrange(pvalue)
+    
+    
+  go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',
+                      primary_columns='logFC',id_column='To')%>%
+   #subset(pvalue<0.05)%>%
+   subset(BH_pvalue<0.2)%>%
+    dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,zscore)%>%
+    arrange(pvalue)
+  p<-plotLeapR(go.order.res,'GO')
+  p
+  ggsave(paste0('GO',prefix,'_enrichment.pdf'),p,width=12)
 
 }
 
-doEnrich(res.norm,'normalized')
-doEnrich(res.orig,'unnormalized')
+doEnrich(res.fixed,'normalized')
+#doEnrich(res.orig,'unnormalized')
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Nothing is significant when i rank by fold change, instead lets do standard fishers exact test enrichment
+
+```{r enrichment in set}
+
+```
