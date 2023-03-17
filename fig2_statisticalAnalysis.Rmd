@@ -148,27 +148,6 @@ res
 #res
 ggsave('fig2_normalization.pdf',res)
 # 
-# ##now plotting  with msn code
-# isletMeta <- isletMeta[colnames(crosstab), ]
-# 
-# ##we keep NA values in m1 and m2
-# red.crosstab <- crosstab[rowMeans(!is.na(crosstab)) >= .5, ]
-# 
-# m1 <- MSnSet(exprs = red.crosstab, pData = isletMeta)
-# 
-# m2<- MSnSet(exprs = crosstab, pData = isletMeta)
-# ##Need to find the plot_pca funciton, is it in msnbase.utils?
-# #plot_pca(m1, phenotype = "Islet_Number") #no batch effect
-# p3=plot_pca(m1, phenotype = "IsletStatus",z_score=T)+ggtitle('Reduced data') #check biplot = T?
-# p4=plot_pca(m2, phenotype = "IsletStatus",z_score=T)+ggtitle("Full data") #check biplot = T?
-# 
-# cowplot::plot_grid(p3,p4)
-# 
-# p5=plot_pca(m1, phenotype = "IsletNumber",z_score=T)+ggtitle('Reduced data') #check biplot = T?
-# p6=plot_pca(m2, phenotype = "IsletNumber",z_score=T)+ggtitle("Full data") #check biplot = T?
-# 
-# cowplot::plot_grid(p5,p6)
-#save(m1, file = "combinedIslets_Results_New/combinedMSnSet.RData", compress = T)
 
 
 ```

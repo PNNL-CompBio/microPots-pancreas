@@ -93,14 +93,6 @@ if(any(duplicated(cor.mat$To))){
     tibble::column_to_rownames('To')
 }
 
-#library(ggfortify)
-#
-#dm <- as.matrix(cor.mat[,3:9])
-#keep<-apply(dm,1,function(x) !any(is.na(x)))
-
-#pc.vals<-prcomp(t(dm[keep,]))
-###how do the values work in 2 dimensions?
-
 hist(cor.names$corVal)
 
 #autoplot(pc.vals,label=TRUE)
@@ -146,7 +138,7 @@ data('krbpaths')
 kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)), function(x) {
   print(x)
   leapR(datamatrix=as.data.frame(cor.mat),krbpaths,'enrichment_in_order',
-                  primary_columns=x,id_column='To')%>%
+                  primary_columns=x,id_column='To',minsize=5)%>%
     subset(pvalue<0.01)%>%
   #  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
     dplyr::mutate(image=x)%>%  
@@ -154,13 +146,14 @@ kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)), function(
 })
 
 krb.order.tab<-do.call(rbind,kegg.order.res)%>%
-#  subset(BH_pvalue<0.05)%>%
-  dplyr::select(zscore,image,pathway)
+  subset(BH_pvalue<0.1)%>%
+  dplyr::select(zscore,image,pathway,pvalue,BH_pvalue,ingroupnames)
 
 kegg.order.tab<-krb.order.tab[grep("KEGG",krb.order.tab$pathway),]
 reac.order.tab<-krb.order.tab[grep("REAC",krb.order.tab$pathway),]
 
 kegg.order.tab<-kegg.order.tab%>%
+  dplyr::select(-c(pvalue,BH_pvalue,ingroupnames))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'_',' '))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'REACTOME|KEGG|BIOCARTA',''))%>%
   mutate(pathway=tolower(pathway))%>%
@@ -169,6 +162,7 @@ kegg.order.tab<-kegg.order.tab%>%
   
   
 reac.order.tab<-reac.order.tab%>%
+    dplyr::select(-c(pvalue,BH_pvalue,ingroupnames))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'_',' '))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'REACTOME|KEGG|BIOCARTA',''))%>%
   mutate(pathway=tolower(pathway))%>%
@@ -191,3 +185,93 @@ pheatmap(reac.order.tab[terms,])
 pheatmap(reac.order.tab[terms,],cellwidth = 10,cellheight=10,filename = 'reacterms.pdf')
 
 ```
+
+One of the reactome terms that was associated was insulin signaling, what if we focus on that?
+
+```{r insu}
+
+path<-subset(krb.order.tab,pathway=='REACTOME_INSULIN_SYNTHESIS_AND_SECRETION')%>%
+  select(ingroupnames)
+prots<-path[1,]%>%
+  stringr::str_split(.,pattern=', ')%>%
+  unlist()
+
+uprots<-subset(map,To%in%prots)%>%
+  dplyr::select("From")
+
+insgluc<-fixed.crosstab[unlist(uprots),]%>%
+  as.data.frame()%>%
+  tibble::rownames_to_column('protein')%>%
+  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+  left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+path.avg<-insgluc%>%
+  dplyr::group_by(sample,`X-coord`,`Y-coord`,`Islet Number`,IsletOrNot)%>%
+  summarize(meanExp=mean(logRatio))
+
+##now we can plot grid
+p<- ggplot(path.avg)+
+   geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=meanExp))+
+   scale_fill_viridis_c()+coord_equal()+
+   geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+   scale_color_manual(values=c('black','white'))+
+   facet_grid(.~`Islet Number`)+theme_classic()
+
+p
+
+##not great, just munges things together
+with.signif<-cor.names%>%
+  mutate(signif=(corTest<0.05))%>%
+                   subset(From%in%unlist(uprots))
+
+cor.means<-with.signif%>%
+  ungroup()%>%
+  dplyr::group_by(To)%>%
+  dplyr::summarize(mval=mean(corVal))%>%
+  arrange(mval)
+
+p2<-with.signif%>%
+  ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
+  geom_jitter()+
+  theme(axis.text.x=element_blank())
+
+p2
+
+ggsave('allCorrelationsInsulinSig.pdf',p2)
+  
+  
+```
+
+Here we can filter out the correlations that are interesting within the insulin signaling pathway, and 
+dive into specific proteins of interest
+
+```{r proteins}
+
+signif<-with.signif%>%
+  subset(signif)%>%
+  dplyr::group_by(From)%>%
+  summarize(numSignif=n())%>%
+  subset(numSignif>1)
+
+
+insgluc<-fixed.crosstab[signif$From,]%>%
+  as.data.frame()%>%
+  tibble::rownames_to_column('From')%>%
+  left_join(map)%>%
+  dplyr::rename(protein='To')%>%
+  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+  left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+p<- ggplot(insgluc)+
+   geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=logRatio))+
+   scale_fill_viridis_c()+coord_equal()+
+   geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+   scale_color_manual(values=c('black','white'))+
+   facet_grid(protein~`Islet Number`)+theme_classic()
+
+p
+
+ggsave('sigInsulinSig.pdf',p,height=10)
+```
+
+these are the proteins within insulin signaling that re correalted with distance

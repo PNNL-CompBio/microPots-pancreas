@@ -19,7 +19,97 @@ library(cowplot)
 library(leapR)
 
 source('loadHumanPancData.R')
+
+
+fixed.crosstab<-correctMissingProteins(fulltab)
+m2<- MSnSet(exprs = fixed.crosstab, pData = isletMeta)
 ```
+
+
+## Check all differential expresion
+
+First we check the differential expression of all regions, including proximal vs distal
+
+```{r full diffex}
+
+#m1 <- MSnSet(exprs = crosstab, pData = isletMeta)
+#Run limma
+res <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus + IsletNumber", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+res2 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus + IsletNumber", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusProximal", trend = T, robust = T) #plot = T?
+
+
+res3 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletStatus + IsletNumber", 
+                       coef.str = "IsletStatus", contrasts = "IsletStatusIslet - IsletStatusDistal", trend = T, robust = T) #plot = T?
+
+res4 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot + IsletNumber", 
+                       coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", trend = T, robust = T) #plot = T?
+
+##TODO: summary table off differential expression with venn diagram
+sigIslet <- res4%>%
+  tibble()%>%
+  subset(adj.P.Val<0.01)%>%
+    subset(abs(logFC)>1)%>%
+mutate(IsletVsOther=ifelse(sign(logFC)<0,'DownInIslet','UpInIslet'))%>%
+  dplyr::select(feature,IsletVsOther)%>%
+   mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsOther',
+                                          values_from='upOrDown',values_fill=0)
+
+
+sigIsletDistal<-res3%>%
+  tibble()%>%
+  subset(adj.P.Val<0.01)%>%  
+  subset(abs(logFC)>1)%>%
+  mutate(IsletVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsIslet','UpInIsletVsDistal'))%>%
+  dplyr::select(feature,IsletVsDistal)%>%
+  mutate(upOrDown=1)%>%
+  tidyr::pivot_wider(names_from='IsletVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+
+sigIsletProximal<-res2%>%
+  tibble()%>%
+  subset(adj.P.Val<0.01)%>%
+    subset(abs(logFC)>1)%>%
+  mutate(IsletVsProximal=ifelse(sign(logFC)<0,'UpInProximalVsIslet','UpInIsletVsProximal'))%>%
+  dplyr::select(feature,IsletVsProximal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsProximal',
+                                          values_from='upOrDown',values_fill=0)
+
+sigProxDistal<-res%>%
+  tibble()%>%
+  subset(adj.P.Val<0.01)%>%
+  subset(abs(logFC)>1)%>%
+  mutate(ProximalVsDistal=ifelse(sign(logFC)<0,'UpInDistalVsProximal','UpInProximalVsDistal'))%>%
+  dplyr::select(feature,ProximalVsDistal)%>%
+  mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='ProximalVsDistal',
+                                          values_from='upOrDown',values_fill=0)
+
+
+#baseline = res3%>%dplyr::select(feature)%>%mutate(base=0)
+
+comb.res<-sigIslet%>%
+  full_join(sigIsletDistal)%>%
+  full_join(sigIsletProximal)%>%
+  full_join(sigProxDistal)
+
+all.cols<-setdiff(colnames(comb.res),'feature')
+navals<-rep(0,length(all.cols))
+names(navals)<-all.cols
+
+ comb.res<-tidyr::replace_na(comb.res,as.list(navals))
+ 
+ library(UpSetR)
+ pdf('diffExOverlapUnnormalized.pdf',onefile=F,height=4)
+ upset(as.data.frame(comb.res),sets=all.cols)
+ dev.off()
+  upset(as.data.frame(comb.res),sets=all.cols)
+
+```
+
+Since there is no real diference between the proximal/distal, we treat them as one. 
 
 ## Re-calculate differnetial expression
 
@@ -28,8 +118,6 @@ Let's double check to see if we can find proximal vs. distal differential expres
 ```{r diffex}
 #m3<- MSnSet(exprs = crosstab2, pData = isletMeta)
 
-fixed.crosstab<-correctMissingProteins(fulltab)
-m2<- MSnSet(exprs = fixed.crosstab, pData = isletMeta)
 
 res.fixed <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot + IsletNumber", 
                        coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", 
@@ -39,8 +127,8 @@ res.fixed <- res.fixed%>%
   mutate(signif=(adj.P.Val<0.01)&abs(logFC)>1)
 #res.orig <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
 #                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
-
-
+p<-ggplot(res.fixed,aes(x=logFC,y=(-log10(adj.P.Val)),col=signif))
+p
 ```
 
 ## Do the LeapR and plot
@@ -83,14 +171,14 @@ doEnrich<-function(res,prefix=''){
 
   rownames(full.islet)<-full.islet$To
   
-  top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.05),logFC>0)$logFC)
-  bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.05),logFC<0)$logFC)
+  top.logfc<-min(subset(subset(full.islet,adj.P.Val<0.01),logFC>0)$logFC)
+  bottom.logfc<-max(subset(subset(full.islet,adj.P.Val<0.01),logFC<0)$logFC)
     
   ###
   ##create matrix
   order.res<-leapR(datamatrix=as.data.frame(full.islet),krbpaths,'enrichment_in_order',
                    primary_columns='logFC',id_column='To')%>%
-  # subset(pvalue<0.05)%>%
+  # subset(pvalue<0.01)%>%
     subset(BH_pvalue<0.2)%>%
     dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,pvalue,zscore)%>%
     arrange(pvalue)
@@ -105,19 +193,29 @@ doEnrich<-function(res,prefix=''){
                     greaterthan=TRUE)%>%
        subset(BH_pvalue<0.01)%>%
     dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
-    dplyr::arrange(pvalue)
+    dplyr::arrange(oddsratio)%>%
+      tibble::rownames_to_column('pathway')
+  
+  go.set.upreg$pathway<-factor(go.set.upreg$pathway,levels=go.set.upreg$pathway)
 
     go.set.downreg<-leapR(datamatrix=as.data.frame(full.islet),gosigs,'enrichment_in_sets',
                     primary_columns='logFC',id_column='To',threshold=(-1),
                     greaterthan=FALSE)%>%
-       subset(BH_pvalue<0.05)%>%
+       subset(BH_pvalue<0.01)%>%
     dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
-    dplyr::arrange(pvalue)
+    dplyr::arrange(oddsratio)%>%
+      tibble::rownames_to_column('pathway')
     
+  ps<-ggplot(go.set.upreg,aes(x=oddsratio,y=pathway,fill=ingroup_n))+
+    geom_bar(stat='identity')+
+    scale_fill_viridis_c()
+    
+  ps
+  ggsave(paste0('GO',prefix,'_setEnrichment.pdf'),ps,width=12)
     
   go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',
                       primary_columns='logFC',id_column='To')%>%
-   #subset(pvalue<0.05)%>%
+   #subset(pvalue<0.01)%>%
    subset(BH_pvalue<0.2)%>%
     dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,zscore)%>%
     arrange(pvalue)
@@ -133,6 +231,3 @@ doEnrich(res.fixed,'normalized')
 
 Nothing is significant when i rank by fold change, instead lets do standard fishers exact test enrichment
 
-```{r enrichment in set}
-
-```
