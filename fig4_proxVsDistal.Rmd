@@ -107,6 +107,9 @@ names(navals)<-all.cols
  dev.off()
   upset(as.data.frame(comb.res),sets=all.cols)
 
+  
+ suppTab2<-rbind(res,res2,res3,res4)
+  write.table(suppTab2,file='suppTab2.csv',sep=',',quote=F,row.names=F,col.names=T)
 ```
 
 Since there is no real diference between the proximal/distal, we treat them as one. 
@@ -124,10 +127,13 @@ res.fixed <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot + IsletNum
                        trend = T, robust = T) #plot = T?
 
 res.fixed <- res.fixed%>%
-  mutate(signif=(adj.P.Val<0.01)&abs(logFC)>1)
+  mutate(signif=(adj.P.Val<0.01)&abs(logFC)>1)%>%
+  as.data.frame()
 #res.orig <- limma_contrasts(eset = m3, model.str = "~ 0 + IsletStatus", 
 #                       coef.str = "IsletStatus", contrasts = "IsletStatusProximal - IsletStatusDistal", trend = T, robust = T) #plot = T?
-p<-ggplot(res.fixed,aes(x=logFC,y=(-log10(adj.P.Val)),col=signif))
+
+#write.table(res.fixed,file='suppTable3.csv',sep=',',row.names=F,col.names=T,quote=F)
+p<-ggplot(res.fixed,aes(x=logFC,y=(-log10(adj.P.Val)),col=signif))+geom_point()
 p
 ```
 
@@ -191,28 +197,35 @@ doEnrich<-function(res,prefix=''){
   go.set.upreg<-leapR(datamatrix=as.data.frame(full.islet),gosigs,'enrichment_in_sets',
                     primary_columns='logFC',id_column='To',threshold=1,
                     greaterthan=TRUE)%>%
-       subset(BH_pvalue<0.01)%>%
+   #    subset(BH_pvalue<0.01)%>%
     dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
     dplyr::arrange(oddsratio)%>%
       tibble::rownames_to_column('pathway')
+  
   
   go.set.upreg$pathway<-factor(go.set.upreg$pathway,levels=go.set.upreg$pathway)
 
     go.set.downreg<-leapR(datamatrix=as.data.frame(full.islet),gosigs,'enrichment_in_sets',
                     primary_columns='logFC',id_column='To',threshold=(-1),
                     greaterthan=FALSE)%>%
-       subset(BH_pvalue<0.01)%>%
+    #   subset(BH_pvalue<0.01)%>%
     dplyr::select(ingroup_n,ingroup_mean,pvalue,BH_pvalue,oddsratio)%>%
     dplyr::arrange(oddsratio)%>%
       tibble::rownames_to_column('pathway')
     
-  ps<-ggplot(go.set.upreg,aes(x=oddsratio,y=pathway,fill=ingroup_n))+
+  fullgo<-rbind(go.set.upreg,go.set.downreg)
+  ps<-fullgo%>%
+    subset(BH_pvalue<0.01)%>%
+    ggplot(aes(x=oddsratio,y=pathway,fill=ingroup_n))+
     geom_bar(stat='identity')+
     scale_fill_viridis_c()
     
   ps
   ggsave(paste0('GO',prefix,'_setEnrichment.pdf'),ps,width=12)
-    
+  
+
+      
+  write.table(fullgo,file='suppTable3.tsv',sep='\t',row.names=F,col.names=T,quote=F)
   go.order.res<-leapR(datamatrix=full.islet,gosigs,'enrichment_in_order',
                       primary_columns='logFC',id_column='To')%>%
    #subset(pvalue<0.01)%>%

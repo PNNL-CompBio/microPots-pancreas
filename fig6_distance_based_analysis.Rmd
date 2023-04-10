@@ -50,10 +50,11 @@ cor.vals<-long.tab%>%
 
 
   
-cor.na.vals<-long.tab%>%
-  dplyr::group_by(protein,`Islet Number`)%>%
+cor.na.vals<-long.tab|>
+  dplyr::group_by(protein,`Islet Number`)|>
   dplyr::summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
             corTest=ct(logFC,`Distance to islet`,method='spearman'))
+write.table(cor.na.vals,file='suppTab6.csv',sep=',',quote=F,row.names=F,col.names=T)
 
 ##which ones are highly anti-correlated
 ```
@@ -259,7 +260,8 @@ insgluc<-fixed.crosstab[signif$From,]%>%
   tibble::rownames_to_column('From')%>%
   left_join(map)%>%
   dplyr::rename(protein='To')%>%
-  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',
+                      values_to='logRatio')%>%
   left_join(tibble::rownames_to_column(isletMeta,'sample'))
 
 p<- ggplot(insgluc)+
@@ -274,4 +276,110 @@ p
 ggsave('sigInsulinSig.pdf',p,height=10)
 ```
 
-these are the proteins within insulin signaling that re correalted with distance
+these are the proteins within insulin signaling that re correalted with distance.
+
+We can generalize this code now in a function
+
+```{r all pathways}
+
+#' this function iterates through all the correlations
+#' and plots those with proteins with significant correlation
+#' in a specific pathway
+plotPathwayCors<-function(krb.order.tab,pathname){
+  
+  #print(pathname)
+
+  path<-subset(krb.order.tab,pathway==pathname)%>%
+    select(ingroupnames)
+
+  prots<-path[1,]%>%
+    stringr::str_split(.,pattern=', ')%>%
+    unlist()
+
+  uprots<-subset(map,To%in%prots)%>%
+    dplyr::select("From")
+
+  insgluc<-fixed.crosstab[unlist(uprots),]%>%
+    as.data.frame()%>%
+    tibble::rownames_to_column('protein')%>%
+    tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+   left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+  path.avg<-insgluc%>%
+    dplyr::group_by(sample,`X-coord`,`Y-coord`,`Islet Number`,IsletOrNot)%>%
+    summarize(meanExp=mean(logRatio))
+
+  ##now we can plot grid
+  p<- ggplot(path.avg)+
+     geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=meanExp))+
+     scale_fill_viridis_c()+coord_equal()+
+    geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+    scale_color_manual(values=c('black','white'))+
+     facet_grid(.~`Islet Number`)+theme_classic()
+
+  
+
+  ##nget proteins that are significantly correlated with distance
+  with.signif<-cor.names%>%
+    mutate(signif=(corTest<0.05))%>%
+                     subset(From%in%unlist(uprots))
+
+  cor.means<-with.signif%>%
+    ungroup()%>%
+    dplyr::group_by(To)%>%
+    dplyr::summarize(mval=mean(corVal))%>%
+    arrange(mval)
+
+  p2<-with.signif%>%
+    ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
+    geom_jitter()+
+    theme(axis.text.x=element_blank())
+  
+#  p2
+
+  ggsave(paste0('allCorrelations',pathname,'.pdf'),p2)
+  
+  signif<-with.signif%>%
+    subset(signif)%>%
+    dplyr::group_by(From)%>%
+    summarize(numSignif=n())%>%
+    subset(numSignif>1) ##number significant genes is at least 2
+  
+  #print(signif)
+  if(nrow(signif)>1){
+    insgluc<-fixed.crosstab[signif$From,]%>%
+      as.data.frame()%>%
+      tibble::rownames_to_column('From')%>%
+      left_join(map)%>%
+      dplyr::rename(protein='To')%>%
+      tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',
+                          values_to='logRatio')%>%
+      left_join(tibble::rownames_to_column(isletMeta,'sample'))
+  
+  p3<- ggplot(insgluc)+
+     geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=logRatio))+
+     scale_fill_viridis_c()+coord_equal()+
+     geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+     scale_color_manual(values=c('black','white'))+
+    facet_grid(protein~`Islet Number`)+theme_classic()
+
+  #p4<-cowplot::plot_grid(p,p2,p3)
+
+    ggsave(paste0('sig_',pathname,'.pdf'),p3,height=10)
+  }
+}
+
+```
+
+
+Here we can filter out those pathways that are significant across ore than 2 voxels, then plot
+
+```{r splicing proteins}
+
+sig<-krb.order.tab%>%
+  group_by(pathway)%>%
+  summarize(num=n())%>%subset(num>3) 
+## significantly correlated in at least three images
+
+lapply(sig$pathway,function(x) plotPathwayCors(krb.order.tab,x))
+```

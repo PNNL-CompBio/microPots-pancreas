@@ -78,6 +78,8 @@ names(allFc)<-res4$To
  
    upres<-set.vertex.attribute(upres,'logFC',verts,fcVals)
     write_graph(upres,format='gml',file=paste0('isletUpProts.gml'))
+        write_graph(upres,format='edgelist',file=paste0('isletUpProts.sif'))
+
 
  }
   res<-NULL
@@ -90,6 +92,7 @@ names(allFc)<-res4$To
    res<-set.vertex.attribute(res,'logFC',verts,fcVals)
 
     write_graph(res,format='gml',file=paste0('isletDownProts.gml'))
+
 }
 
 ```

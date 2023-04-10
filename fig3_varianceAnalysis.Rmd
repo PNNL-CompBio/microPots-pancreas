@@ -32,6 +32,7 @@ We first need to plot the original protein expression levels
 
 ```{r Insulin expression plots}
 
+##we use this function every time
 fixed.crosstab<-correctMissingProteins(fulltab)
 
 insgluc<-fixed.crosstab[c('INS_HUMAN','GLUC_HUMAN'),]%>%
