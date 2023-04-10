@@ -26,11 +26,11 @@ source('loadHumanPancData.R')
 
 We're just going to focus on teh pooled islet solution
 
-```{r cars}
+```{r lod network}
 library(PCSF)
 data('STRING')
-m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
-res4 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot", 
+m2<- MSnSet(exprs = fixed.crosstab, pData = isletMeta)
+res4 <- limma_contrasts(eset = m2, model.str = "~ 0 + IsletOrNot + IsletNumber", 
                        coef.str = "IsletOrNot", contrasts = "IsletOrNotIslet - IsletOrNotNonIslet", trend = T, robust = T) #plot = T?
 
 map<-read.table('uniprotMap.txt',header = TRUE)
@@ -40,13 +40,15 @@ map<-read.table('uniprotMap.txt',header = TRUE)
 
 ##TODO: summary table off differential expression with venn diagram
 res4<-res4%>%
-  tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  #tidyr::separate(feature,sep='\\|',into=c('sp','id','From'))%>%
+  dplyr::rename(From='feature')%>%
   left_join(map)%>%
   subset(!is.na(To))
 
 sigIslet <- res4%>%
   tibble()%>%
-  subset(adj.P.Val<0.05)%>%
+  subset(adj.P.Val<0.01)%>%
+  subset(abs(logFC)>1)%>%
   mutate(IsletVsOther=ifelse(sign(logFC)<0,'DownInIslet','UpInIslet'))%>%
   dplyr::select(To,IsletVsOther,logFC)
     # mutate(upOrDown=1)%>%tidyr::pivot_wider(names_from='IsletVsOther',
@@ -76,6 +78,8 @@ names(allFc)<-res4$To
  
    upres<-set.vertex.attribute(upres,'logFC',verts,fcVals)
     write_graph(upres,format='gml',file=paste0('isletUpProts.gml'))
+        write_graph(upres,format='edgelist',file=paste0('isletUpProts.sif'))
+
 
  }
   res<-NULL
@@ -88,6 +92,7 @@ names(allFc)<-res4$To
    res<-set.vertex.attribute(res,'logFC',verts,fcVals)
 
     write_graph(res,format='gml',file=paste0('isletDownProts.gml'))
+
 }
 
 ```

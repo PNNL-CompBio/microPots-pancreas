@@ -1,0 +1,156 @@
+---
+title: "HubMap pancreata exploratory figures and statistical analysis"
+output: html_document
+---
+
+This document describes the basic analysis we need to showcase the value of the Hubmap data and proteomics analysis.
+
+```{r loading, echo=F, warning=F, message=F}
+library(dplyr)
+library(purrr)
+#library(devtools)
+require(NatParksPalettes)
+#library(MSnSet.utils)
+#if(!require(MSnSet.utils))
+#  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
+library(ggplot2)
+library(ggfortify)
+library(cowplot)
+#library(ggbiplot)
+
+source('loadHumanPancData.R')
+
+
+```
+
+Note that we store all files on synapse at [http://synapse.org/hubmap](http://synapse.org/hubmap). This includes basic data files and analysis results.
+
+Now we have a few ways to normalize.
+
+### First we evaluate and correct for missingness
+
+Let's plot the distribution of all of the values, test for normality, and plot the PCs.
+
+
+```{r account for missing data}
+##here we plot number of proteins missing across each image?
+
+missing<-fulltab%>%
+  dplyr::mutate(Grid=as.factor(`Grid Number`))%>%
+  dplyr::group_by(Spot,Image,Grid,IsletOrNot)%>%
+  dplyr::summarize(count=n(),nas=sum(is.na(logRatio)))%>%
+  mutate(fracNAs=nas/count)
+
+p2<-ggplot(missing,aes(x=Grid,y=fracNAs,fill=Image))+
+  geom_bar(stat='identity',position='dodge')+
+   scale_fill_manual(values=natparks.pals('RockyMtn',7))+
+  theme_bw()
+  
+
+ggsave('a_missingProts.pdf',p2)
+p2
+
+#ggplot(missing,aes(x=Image,y=nas,fill=IsletOrNot))+geom_bar(stat='identity',position='dodge')
+
+```
+
+## Replace missing proteins
+
+Here we replace missing proteins with the median value across all experiments
+
+
+```{r normality test}
+
+##now we can fix up the missingness
+
+fixed.crosstab<-correctMissingProteins(fulltab)
+
+meta<-fulltab%>%
+  dplyr::select(Spot,Image,Xcoord,Ycoord,IsletStatus,`Grid Number`,Plex)%>%
+  distinct()
+
+fixed.tab<-fixed.crosstab%>%
+  as.data.frame()%>%
+  tibble::rownames_to_column('protein')%>%
+  tidyr::pivot_longer(-protein,names_to='Spot',values_to='logRatio')%>%
+  dplyr::left_join(meta)
+
+
+library(ggridges)
+library(NatParksPalettes)
+p1<-ggplot(dplyr::mutate(fixed.tab,Grid=as.factor(`Grid Number`)),
+       aes(x=logRatio,fill=Image,y=Grid))+
+  geom_density_ridges2(alpha=0.5)+
+  scale_fill_manual(values=natparks.pals('RockyMtn',7))+
+  theme_bw()
+
+p1
+
+ggsave('b_fixed_countdistributionPlot.pdf',p1)
+
+
+
+shap_ps<-fixed.tab%>%
+     group_by(Spot)%>%
+     dplyr::summarise(norm_p=shapiro.test(sample(logRatio,size=4400))$p.value)%>%
+   mutate(logP=log10(norm_p))
+ 
+# ggplot(dplyr::mutate(normtab,Grid=as.factor(`Grid Number`)),
+#        aes(x=logRatio,fill=Grid,y=Image))+
+#   geom_density_ridges2(alpha=0.5)
+# 
+# shap_norm_ps<-normtab%>%
+#   as.data.frame()%>%
+#   group_by(Spot)%>%
+#   dplyr::summarise(norm_p=shapiro.test(sample(logRatio,size=4400))$p.value)
+
+```
+
+Now that we have visualized the data, we need to count the number of proteins, those with complete coverage, and how many overall NA values we have.  For the purposes of this analysis, we set the NA values to the median for each image. 
+
+
+```{r PCA plots}
+
+##plot 1 vs. 2, and 2 vs. 3
+pc.z<-prcomp(t(fixed.crosstab), center=TRUE,scale.=TRUE)
+#pc.n<-prcomp(t(norm.crosstab), center=TRUE,scale.=TRUE)
+
+
+#autoplot(pc,data=isletMeta,colour='IsletNumber')
+plot(pc.z)
+#plot(pc.n)
+
+p3<-autoplot(pc.z,data=isletMeta,colour='IsletStatus')+
+  scale_color_manual(values=natparks.pals('Saguaro',3))+
+  theme_bw()
+
+
+#p3n<-autoplot(pc.n,data=isletMeta,colour='IsletStatus')+
+#  scale_color_manual(values=natparks.pals('Saguaro',3))+
+#  theme_bw()
+
+#p3<-autoplot(pc.z,data=isletMeta,colour='IsletStatus')+ggtitle('Full data')
+
+p4<-autoplot(pc.z,data=isletMeta,colour='IsletNumber')+
+  scale_color_manual(values=natparks.pals('RockyMtn',7))+
+  theme_bw()
+
+#p4n<-autoplot(pc.n,data=isletMeta,colour='IsletNumber')+
+#  scale_color_manual(values=natparks.pals('RockyMtn',7))+
+#  theme_bw()
+
+
+res<-cowplot::plot_grid(p1,p2,p3,p4,nrow = 2,ncol=2)
+res
+
+#res<-cowplot::plot_grid(p3,p4,p3n,p4n,nrow = 2,ncol=2)
+#res
+ggsave('fig2_normalization.pdf',res)
+# 
+
+
+```
+
+
+

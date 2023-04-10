@@ -32,6 +32,7 @@ We first need to plot the original protein expression levels
 
 ```{r Insulin expression plots}
 
+##we use this function every time
 fixed.crosstab<-correctMissingProteins(fulltab)
 
 insgluc<-fixed.crosstab[c('INS_HUMAN','GLUC_HUMAN'),]%>%
@@ -92,23 +93,21 @@ non.dupes<-var.vals%>%
 
 fixed.dupes<-var.vals%>%
     subset(To%in%dupes)%>%
-    group_by(To,.drop=F)%>%
-    summarize(maxVar=max(variance))%>%
+    dplyr::group_by(To,.drop=F)%>%
+    dplyr::summarize(maxVar=max(variance))%>%
     left_join(var.vals)%>%
     subset(maxVar==variance)%>%
   dplyr::select(-maxVar)
 
 full.var<-rbind(non.dupes,fixed.dupes)%>%
-  tibble::remove_rownames()%>%
-  tibble::column_to_rownames('To')%>%
+#  tibble::remove_rownames()%>%
+ # tibble::column_to_rßownames('To')%>%
   arrange(desc(variance))
 
 ##Now we can do analysis on thoes that are changing or not changing.
 order.res<-leapR(datamatrix=full.var,krbpaths,'enrichment_in_order',
-                 primary_columns='variance',minsize=10)%>%
-  subset(BH_pvalue<0.01)%>%
- # dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
-  arrange(BH_pvalue)
+                 primary_columns='variance',id_column='To',minsize=10)%>%
+  subset(BH_pvalue<0.01)
 
 p<-plotLeapR(order.res,'REACTOME')
 

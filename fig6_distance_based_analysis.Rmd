@@ -9,9 +9,7 @@ output: html_document
 library(dplyr)
 library(purrr)
 library(devtools)
-#library(MSnSet.utils)
-if(!require(MSnSet.utils))
-  devtools::install_github('PNNL-Comp-Mass-Spec/MSnSet.utils')
+
 
 library(ggplot2)
 library(ggfortify)
@@ -23,16 +21,17 @@ source('loadHumanPancData.R')
 ## Map to distances
 get data and metadata nad join to get distance data
 
-```{r distnace data, message=FALSE, warning=FALSE}
+```{r distnace data, message=FALSE, warning=FALSE, message=FALSE,error=FALSE}
 
-m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+#m2<- MSnSet(exprs = crosstab2, pData = isletMeta)
+
+fixed.crosstab<-correctMissingProteins(fulltab)
 
 
-
-long.tab<-exprs(m2)%>%
+long.tab<-fixed.crosstab%>%#exprs(m2)%>%
   as.data.frame()%>%
   tibble::rownames_to_column('protein')%>%
-  tidyr::pivot_longer(cols=c(1:ncol(exprs(m2))+1),
+  tidyr::pivot_longer(cols=c(1:ncol(fixed.crosstab)+1),
                       names_to='sample',
                       values_to='logFC')%>%
   left_join(tibble::rownames_to_column(isletMeta,'sample'))%>%
@@ -45,16 +44,17 @@ ct<-function(x,y,method){
 }
 
 cor.vals<-long.tab%>%
-  group_by(protein)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'),
+  dplyr::group_by(protein,`Islet Number`)%>%
+  dplyr::summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='pearson'),
             corTest=ct(logFC,`Distance to islet`,method='pearson'))
-      
-  
-cor.na.vals<-long.tab%>%
-  group_by(protein)%>%
-  summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
-            corTest=ct(logFC,`Distance to islet`,method='spearman'))
 
+
+  
+cor.na.vals<-long.tab|>
+  dplyr::group_by(protein,`Islet Number`)|>
+  dplyr::summarize(corVal=cor(logFC,`Distance to islet`,use='pairwise.complete.obs',method='spearman'),
+            corTest=ct(logFC,`Distance to islet`,method='spearman'))
+write.table(cor.na.vals,file='suppTab6.csv',sep=',',quote=F,row.names=F,col.names=T)
 
 ##which ones are highly anti-correlated
 ```
@@ -71,38 +71,33 @@ map<-read.table('uniprotMap.txt',header = TRUE)
 #  left_join(map)%>%
 
 ##TODO: summary table off differential expression with venn diagram
-cor.names<-cor.vals%>%
-  tidyr::separate(protein,sep='\\|',into=c('sp','id','From'))%>%
+cor.names<-cor.na.vals%>%
+#  tidyr::separate(protein,sep='',into=c('sp','id','From'))%>%
+  dplyr::rename(From='protein')%>%
   left_join(map)%>%
   subset(!is.na(To))
 
-#%>%
-#  arrange(corVal)
 
 cor.mat<-cor.names%>%
+  dplyr::ungroup()%>%
+  dplyr::select(-c(corTest,From))%>%
   dplyr::mutate(`Islet Number`=as.character(`Islet Number`))%>%
-  tidyr::pivot_wider(names_from=`Islet Number`,values_from=corVal)#%>%
+  tidyr::pivot_wider(names_from=`Islet Number`,values_from=corVal,values_fn=list(corVal=mean))#%>%
 #  tibble::column_to_rownames('To')
 
 ##now remove dupes
-dupes<-cor.mat$To[which(duplicated(cor.mat$To))]
+if(any(duplicated(cor.mat$To))){
+  dupes<-cor.mat$To[which(duplicated(cor.mat$To))]
 
-cor.mat<-cor.mat%>%
-  subset(!To%in%dupes)%>%
-  tibble::column_to_rownames('To')
-
-library(ggfortify)
-
-dm <- as.matrix(cor.mat[,4:10])
-keep<-apply(dm,1,function(x) !any(is.na(x)))
-
-pc.vals<-prcomp(t(dm[keep,]))
-###how do the values work in 2 dimensions?
+  cor.mat<-cor.mat%>%
+    subset(!To%in%dupes)%>%
+    tibble::column_to_rownames('To')
+}
 
 hist(cor.names$corVal)
 
-autoplot(pc.vals,label=TRUE)
-ggsave('correlationPCA.pdf')
+#autoplot(pc.vals,label=TRUE)
+#ggsave('correlationPCA.pdf')
 ```
 
 now we have all the correlation values
@@ -112,24 +107,24 @@ library(leapR)
 library(pheatmap)
 #data("ncipid")
 
-go.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),
-                       function(x) {
-                         leapR(datamatrix=cor.mat,gosigs,'enrichment_in_order',
-                 primary_columns=x,minsize=10)%>%
-  subset(BH_pvalue<0.05)%>%
-#  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
-  arrange(BH_pvalue)%>%
-  mutate(image=x)%>%tibble::rownames_to_column('Pathway')
-                        })
+go.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),function(x) {
+  print(x)
+               leapR(datamatrix=as.data.frame(cor.mat),gosigs,'enrichment_in_order',
+                     primary_columns=x,id_column='To')%>%
+               subset(pvalue<0.01)%>%
+  #  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+              mutate(image=x)%>%
+               tibble::rownames_to_column('Pathway')
+              })
 
 go.order.tab<-do.call(rbind,go.order.res)%>%
-#  subset(BH_pvalue<0.05)%>%
+  #subset(pvalue<0.05)%>%
   dplyr::select(Pathway,zscore,image)%>%
   mutate(Pathway=stringr::str_replace_all(Pathway," \\(GO:[0-9]*\\)",''))%>%
   tidyr::pivot_wider(names_from='image',values_from='zscore',values_fill=list(zscore=0.0))%>%
   tibble::column_to_rownames('Pathway')
   
-terms<-which(apply(go.order.tab,1,function(x) length(which(x==0))<4))
+terms<-which(apply(go.order.tab,1,function(x) length(which(x==0))<3))
 
 pheatmap(go.order.tab[names(terms),],cellwidth = 10,cellheight=10,filename = 'goBPterms.pdf')
 ```
@@ -141,29 +136,25 @@ now lets do kegg
 data('krbpaths')
 
 
-kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),
-                       function(x) {
-                         leapR(datamatrix=cor.mat,krbpaths,'enrichment_in_order',
-                 primary_columns=x,
-                 minsize=5)%>%
-  subset(BH_pvalue<0.05)%>%
-                           
-#  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
-  arrange(BH_pvalue)%>%
-                           
-  mutate(image=x)%>%  
-                           tibble::rownames_to_column('pathway')
-
-                         })
+kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)), function(x) {
+  print(x)
+  leapR(datamatrix=as.data.frame(cor.mat),krbpaths,'enrichment_in_order',
+                  primary_columns=x,id_column='To',minsize=5)%>%
+    subset(pvalue<0.01)%>%
+  #  dplyr::select(ingroup_n,ingroup_mean,BH_pvalue,zscore)%>%
+    dplyr::mutate(image=x)%>%  
+    tibble::rownames_to_column('pathway')
+})
 
 krb.order.tab<-do.call(rbind,kegg.order.res)%>%
-#  subset(BH_pvalue<0.05)%>%
-  dplyr::select(zscore,image,pathway)
+  subset(BH_pvalue<0.1)%>%
+  dplyr::select(zscore,image,pathway,pvalue,BH_pvalue,ingroupnames)
 
 kegg.order.tab<-krb.order.tab[grep("KEGG",krb.order.tab$pathway),]
 reac.order.tab<-krb.order.tab[grep("REAC",krb.order.tab$pathway),]
 
 kegg.order.tab<-kegg.order.tab%>%
+  dplyr::select(-c(pvalue,BH_pvalue,ingroupnames))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'_',' '))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'REACTOME|KEGG|BIOCARTA',''))%>%
   mutate(pathway=tolower(pathway))%>%
@@ -172,6 +163,7 @@ kegg.order.tab<-kegg.order.tab%>%
   
   
 reac.order.tab<-reac.order.tab%>%
+    dplyr::select(-c(pvalue,BH_pvalue,ingroupnames))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'_',' '))%>%
   mutate(pathway=stringr::str_replace_all(pathway,'REACTOME|KEGG|BIOCARTA',''))%>%
   mutate(pathway=tolower(pathway))%>%
@@ -193,4 +185,201 @@ pheatmap(reac.order.tab[terms,])
 
 pheatmap(reac.order.tab[terms,],cellwidth = 10,cellheight=10,filename = 'reacterms.pdf')
 
+```
+
+One of the reactome terms that was associated was insulin signaling, what if we focus on that?
+
+```{r insu}
+
+path<-subset(krb.order.tab,pathway=='REACTOME_INSULIN_SYNTHESIS_AND_SECRETION')%>%
+  select(ingroupnames)
+prots<-path[1,]%>%
+  stringr::str_split(.,pattern=', ')%>%
+  unlist()
+
+uprots<-subset(map,To%in%prots)%>%
+  dplyr::select("From")
+
+insgluc<-fixed.crosstab[unlist(uprots),]%>%
+  as.data.frame()%>%
+  tibble::rownames_to_column('protein')%>%
+  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+  left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+path.avg<-insgluc%>%
+  dplyr::group_by(sample,`X-coord`,`Y-coord`,`Islet Number`,IsletOrNot)%>%
+  summarize(meanExp=mean(logRatio))
+
+##now we can plot grid
+p<- ggplot(path.avg)+
+   geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=meanExp))+
+   scale_fill_viridis_c()+coord_equal()+
+   geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+   scale_color_manual(values=c('black','white'))+
+   facet_grid(.~`Islet Number`)+theme_classic()
+
+p
+
+##not great, just munges things together
+with.signif<-cor.names%>%
+  mutate(signif=(corTest<0.05))%>%
+                   subset(From%in%unlist(uprots))
+
+cor.means<-with.signif%>%
+  ungroup()%>%
+  dplyr::group_by(To)%>%
+  dplyr::summarize(mval=mean(corVal))%>%
+  arrange(mval)
+
+p2<-with.signif%>%
+  ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
+  geom_jitter()+
+  theme(axis.text.x=element_blank())
+
+p2
+
+ggsave('allCorrelationsInsulinSig.pdf',p2)
+  
+  
+```
+
+Here we can filter out the correlations that are interesting within the insulin signaling pathway, and 
+dive into specific proteins of interest
+
+```{r proteins}
+
+signif<-with.signif%>%
+  subset(signif)%>%
+  dplyr::group_by(From)%>%
+  summarize(numSignif=n())%>%
+  subset(numSignif>1)
+
+
+insgluc<-fixed.crosstab[signif$From,]%>%
+  as.data.frame()%>%
+  tibble::rownames_to_column('From')%>%
+  left_join(map)%>%
+  dplyr::rename(protein='To')%>%
+  tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',
+                      values_to='logRatio')%>%
+  left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+p<- ggplot(insgluc)+
+   geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=logRatio))+
+   scale_fill_viridis_c()+coord_equal()+
+   geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+   scale_color_manual(values=c('black','white'))+
+   facet_grid(protein~`Islet Number`)+theme_classic()
+
+p
+
+ggsave('sigInsulinSig.pdf',p,height=10)
+```
+
+these are the proteins within insulin signaling that re correalted with distance.
+
+We can generalize this code now in a function
+
+```{r all pathways}
+
+#' this function iterates through all the correlations
+#' and plots those with proteins with significant correlation
+#' in a specific pathway
+plotPathwayCors<-function(krb.order.tab,pathname){
+  
+  #print(pathname)
+
+  path<-subset(krb.order.tab,pathway==pathname)%>%
+    select(ingroupnames)
+
+  prots<-path[1,]%>%
+    stringr::str_split(.,pattern=', ')%>%
+    unlist()
+
+  uprots<-subset(map,To%in%prots)%>%
+    dplyr::select("From")
+
+  insgluc<-fixed.crosstab[unlist(uprots),]%>%
+    as.data.frame()%>%
+    tibble::rownames_to_column('protein')%>%
+    tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',values_to='logRatio')%>%
+   left_join(tibble::rownames_to_column(isletMeta,'sample'))
+
+  path.avg<-insgluc%>%
+    dplyr::group_by(sample,`X-coord`,`Y-coord`,`Islet Number`,IsletOrNot)%>%
+    summarize(meanExp=mean(logRatio))
+
+  ##now we can plot grid
+  p<- ggplot(path.avg)+
+     geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=meanExp))+
+     scale_fill_viridis_c()+coord_equal()+
+    geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+    scale_color_manual(values=c('black','white'))+
+     facet_grid(.~`Islet Number`)+theme_classic()
+
+  
+
+  ##nget proteins that are significantly correlated with distance
+  with.signif<-cor.names%>%
+    mutate(signif=(corTest<0.05))%>%
+                     subset(From%in%unlist(uprots))
+
+  cor.means<-with.signif%>%
+    ungroup()%>%
+    dplyr::group_by(To)%>%
+    dplyr::summarize(mval=mean(corVal))%>%
+    arrange(mval)
+
+  p2<-with.signif%>%
+    ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
+    geom_jitter()+
+    theme(axis.text.x=element_blank())
+  
+#  p2
+
+  ggsave(paste0('allCorrelations',pathname,'.pdf'),p2)
+  
+  signif<-with.signif%>%
+    subset(signif)%>%
+    dplyr::group_by(From)%>%
+    summarize(numSignif=n())%>%
+    subset(numSignif>1) ##number significant genes is at least 2
+  
+  #print(signif)
+  if(nrow(signif)>1){
+    insgluc<-fixed.crosstab[signif$From,]%>%
+      as.data.frame()%>%
+      tibble::rownames_to_column('From')%>%
+      left_join(map)%>%
+      dplyr::rename(protein='To')%>%
+      tidyr::pivot_longer(2:(1+ncol(fixed.crosstab)),names_to='sample',
+                          values_to='logRatio')%>%
+      left_join(tibble::rownames_to_column(isletMeta,'sample'))
+  
+  p3<- ggplot(insgluc)+
+     geom_raster(aes(x=`X-coord`,y=`Y-coord`,fill=logRatio))+
+     scale_fill_viridis_c()+coord_equal()+
+     geom_point(aes(x=`X-coord`,y=`Y-coord`,col=IsletOrNot,alpha=0.1))+
+     scale_color_manual(values=c('black','white'))+
+    facet_grid(protein~`Islet Number`)+theme_classic()
+
+  #p4<-cowplot::plot_grid(p,p2,p3)
+
+    ggsave(paste0('sig_',pathname,'.pdf'),p3,height=10)
+  }
+}
+
+```
+
+
+Here we can filter out those pathways that are significant across ore than 2 voxels, then plot
+
+```{r splicing proteins}
+
+sig<-krb.order.tab%>%
+  group_by(pathway)%>%
+  summarize(num=n())%>%subset(num>3) 
+## significantly correlated in at least three images
+
+lapply(sig$pathway,function(x) plotPathwayCors(krb.order.tab,x))
 ```
