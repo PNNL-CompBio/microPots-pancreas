@@ -118,7 +118,7 @@ go.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)),function(x) 
               })
 
 go.order.tab<-do.call(rbind,go.order.res)%>%
-  #subset(pvalue<0.05)%>%
+  #subset(BH_pvalue<0.05)%>%
   dplyr::select(Pathway,zscore,image)%>%
   mutate(Pathway=stringr::str_replace_all(Pathway," \\(GO:[0-9]*\\)",''))%>%
   tidyr::pivot_wider(names_from='image',values_from='zscore',values_fill=list(zscore=0.0))%>%
@@ -147,7 +147,7 @@ kegg.order.res<-lapply(unique(as.character(cor.names$`Islet Number`)), function(
 })
 
 krb.order.tab<-do.call(rbind,kegg.order.res)%>%
-  subset(BH_pvalue<0.1)%>%
+  subset(BH_pvalue<0.05)%>%
   dplyr::select(zscore,image,pathway,pvalue,BH_pvalue,ingroupnames)
 
 kegg.order.tab<-krb.order.tab[grep("KEGG",krb.order.tab$pathway),]
@@ -234,7 +234,7 @@ cor.means<-with.signif%>%
 p2<-with.signif%>%
   ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
   geom_jitter()+
-  theme(axis.text.x=element_blank())
+  theme(axis.text.x=element_blank())+ggtitle("Significance of insulin signaling proteins")
 
 p2
 
@@ -331,13 +331,13 @@ plotPathwayCors<-function(krb.order.tab,pathname){
     arrange(mval)
 
   p2<-with.signif%>%
-    ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=signif))+
+    ggplot(aes(x=factor(To,levels=cor.means$To),y=corVal,col=as.factor(`Islet Number`),shape=signif))+
     geom_jitter()+
     theme(axis.text.x=element_blank())
   
 #  p2
 
-  ggsave(paste0('allCorrelations',pathname,'.pdf'),p2)
+  ggsave(paste0('allCorrelations',pathname,'.pdf'),p2,width=10)
   
   signif<-with.signif%>%
     subset(signif)%>%
